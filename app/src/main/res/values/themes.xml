@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.JIdeLite" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">@color/surface_run</item>
+        <item name="colorPrimaryDark">@color/bg_app</item>
+        <item name="colorAccent">@color/surface_run</item>
+        <item name="android:windowBackground">@color/bg_app</item>
+        <item name="android:statusBarColor">@color/bg_app</item>
+        <item name="android:navigationBarColor">@color/bg_app</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:editTextBackground">@android:color/transparent</item>
+    </style>
+
+</resources>

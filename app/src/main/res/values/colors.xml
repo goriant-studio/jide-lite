@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_app">#17191F</color>
+    <color name="surface_top_bar">#1C1F28</color>
+    <color name="surface_panel">#1D2028</color>
+    <color name="surface_editor">#1B1E26</color>
+    <color name="surface_terminal">#15171D</color>
+    <color name="surface_button">#252935</color>
+    <color name="surface_button_pressed">#2C3140</color>
+    <color name="surface_run">#314E5F</color>
+    <color name="surface_run_pressed">#396174</color>
+    <color name="surface_selected">#273342</color>
+    <color name="border_subtle">#2D3240</color>
+    <color name="border_selected">#55738A</color>
+    <color name="text_primary">#F4F6F8</color>
+    <color name="text_muted">#98A0B2</color>
+    <color name="text_hint">#6C7486</color>
+    <color name="terminal_text">#DEE2EA</color>
+    <color name="syntax_keyword">#FF9E64</color>
+    <color name="syntax_string">#98C379</color>
+    <color name="syntax_comment">#6B7285</color>
+    <color name="syntax_annotation">#7DCFFF</color>
+    <color name="syntax_number">#D19A66</color>
+</resources>
