@@ -6,6 +6,7 @@ J-IDE Lite is an Android Java editor for quick on-device experiments. It include
 
 - Compose-based multi-pane UI with file explorer, java editor, and terminal output (read-only)
 - Local app-private workspace with support for `.java` and `pom.xml`
+- Local SQLite state database (`jide-state.db`) for workspace/editor/build metadata
 - Quick file creation (`Main.java`, `Main2.java`, `Main3.java`, ...)
 - One-tap actions for save, format, run, clear terminal, and dependency resolve
 - Java syntax highlighting and editor shortcuts (indent, smart newline, copy/cut/paste/select all)
@@ -38,6 +39,13 @@ Install on connected device/emulator:
 ./gradlew installDebug
 # Windows: .\gradlew.bat installDebug
 ```
+
+## Play Store Release
+
+- Package name: `com.goriant.jidelite`
+- Signing template: `keystore.properties.example`
+- Full checklist: [`docs/playstore-release.md`](docs/playstore-release.md)
+- Note: release `.aab` must be signed with your upload key before Play Console upload.
 
 ## Test
 
@@ -83,6 +91,7 @@ Unit tests currently cover formatter/editor helpers, storage behavior, local run
 - Optional dependencies are skipped
 - Runtime dependency packaging is currently `jar` only
 - Downloaded artifacts are cached in app files directory under `m2/repository`
+- Workbench-like UI state is persisted in SQLite (`ItemTable`) as key/value entries
 
 ## Limitations
 
@@ -97,7 +106,7 @@ Unit tests currently cover formatter/editor helpers, storage behavior, local run
 ```text
 .
 |-- app/
-|   |-- src/main/java/com/jidelite/
+|   |-- src/main/java/com/goriant/jidelite/
 |   |   |-- MainActivity.kt
 |   |   |-- data/
 |   |   |-- editor/

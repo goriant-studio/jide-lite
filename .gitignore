@@ -27,6 +27,7 @@ local.properties
 !gradle/wrapper/gradle-wrapper.jar
 
 # Signing files
+keystore.properties
 *.jks
 *.keystore
 *.pem

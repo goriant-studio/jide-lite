@@ -9,29 +9,68 @@ configurations.configureEach {
     exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
 }
 
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { stream ->
+        keystoreProperties.load(stream)
+    }
+}
+
+def releaseStoreFile = (keystoreProperties.getProperty('storeFile')
+        ?: System.getenv('ANDROID_UPLOAD_STORE_FILE'))?.trim()
+def releaseStorePassword = (keystoreProperties.getProperty('storePassword')
+        ?: System.getenv('ANDROID_UPLOAD_STORE_PASSWORD'))?.trim()
+def releaseKeyAlias = (keystoreProperties.getProperty('keyAlias')
+        ?: System.getenv('ANDROID_UPLOAD_KEY_ALIAS'))?.trim()
+def releaseKeyPassword = (keystoreProperties.getProperty('keyPassword')
+        ?: System.getenv('ANDROID_UPLOAD_KEY_PASSWORD'))?.trim()
+def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+if (!hasReleaseSigning) {
+    logger.lifecycle(
+            'Release signing is not configured. Set keystore.properties or ANDROID_UPLOAD_* environment variables before Play Store upload.'
+    )
+}
+
 android {
-    namespace 'com.jidelite'
-    compileSdk 34
+    namespace = 'com.goriant.jidelite'
+    compileSdk = 34
 
     defaultConfig {
-        applicationId "com.jidelite"
-        minSdk 26
-        targetSdk 34
-        versionCode 4
-        versionName "1.3"
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        applicationId = "com.goriant.jidelite"
+        testApplicationId = "com.goriant.jidelite.test"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 4
+        versionName = "1.3"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled = true
+            shrinkResources = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.release
+            }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
@@ -39,7 +78,7 @@ android {
     }
 
     buildFeatures {
-        compose true
+        compose = true
     }
 
     testOptions {
@@ -47,7 +86,7 @@ android {
             useJUnitPlatform()
         }
     }
-    buildToolsVersion '34.0.0'
+    buildToolsVersion = '34.0.0'
 }
 
 dependencies {
