@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.jidelite.editor.JavaSyntaxHighlighter
+import com.jidelite.editor.JavaCodeFormatter
 import com.jidelite.model.RunResult
 import com.jidelite.runner.CodeRunner
 import com.jidelite.runner.LocalJavaRunner
@@ -85,6 +86,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var fileStorageHelper: FileStorageHelper
     private lateinit var codeRunner: CodeRunner
     private lateinit var syntaxHighlighter: JavaSyntaxHighlighter
+    private lateinit var javaCodeFormatter: JavaCodeFormatter
     private lateinit var runExecutor: ExecutorService
 
     private val files = mutableStateListOf<File>()
@@ -107,6 +109,7 @@ class MainActivity : ComponentActivity() {
         fileStorageHelper = FileStorageHelper(this)
         codeRunner = LocalJavaRunner(this, fileStorageHelper.workspaceDirectory)
         syntaxHighlighter = JavaSyntaxHighlighter(this)
+        javaCodeFormatter = JavaCodeFormatter()
         runExecutor = Executors.newSingleThreadExecutor()
         terminalText = getString(R.string.terminal_ready)
         statusText = getString(R.string.status_ready)
@@ -127,6 +130,7 @@ class MainActivity : ComponentActivity() {
                     isTopBarCollapsed = isTopBarCollapsed,
                     onNewFile = { createNewFile() },
                     onSave = { saveCurrentFile(showToast = true) },
+                    onFormat = { formatCurrentFile() },
                     onRun = { runCurrentFile() },
                     onToggleExplorer = { isExplorerCollapsed = !isExplorerCollapsed },
                     onToggleTopBar = { isTopBarCollapsed = !isTopBarCollapsed },
@@ -250,6 +254,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun formatCurrentFile() {
+        val fileName = selectedFileName
+        if (fileName.isNullOrBlank()) {
+            showToast(getString(R.string.toast_no_file_selected))
+            return
+        }
+
+        val formattedSource = javaCodeFormatter.format(editorText)
+        if (formattedSource == editorText) {
+            statusText = getString(R.string.status_already_formatted)
+            showToast(getString(R.string.toast_format_no_changes))
+            return
+        }
+
+        editorText = formattedSource
+        isDirty = true
+        statusText = getString(R.string.status_formatted, fileName)
+        showToast(getString(R.string.toast_formatted))
+    }
+
     private fun renderRunResult(runResult: RunResult) {
         val isSimulated = runResult.exitCode < 0 &&
                 (runResult.stdout.contains("Execution mode: simulated", ignoreCase = true) ||
@@ -348,6 +372,7 @@ class MainActivity : ComponentActivity() {
         isTopBarCollapsed: Boolean,
         onNewFile: () -> Unit,
         onSave: () -> Unit,
+        onFormat: () -> Unit,
         onRun: () -> Unit,
         onToggleExplorer: () -> Unit,
         onToggleTopBar: () -> Unit,
@@ -370,6 +395,7 @@ class MainActivity : ComponentActivity() {
                     isExplorerCollapsed = isExplorerCollapsed,
                     onNewFile = onNewFile,
                     onSave = onSave,
+                    onFormat = onFormat,
                     onRun = onRun,
                     onToggleExplorer = onToggleExplorer,
                     onToggleCollapse = onToggleTopBar
@@ -442,6 +468,7 @@ class MainActivity : ComponentActivity() {
         isExplorerCollapsed: Boolean,
         onNewFile: () -> Unit,
         onSave: () -> Unit,
+        onFormat: () -> Unit,
         onRun: () -> Unit,
         onToggleExplorer: () -> Unit,
         onToggleCollapse: () -> Unit
@@ -522,6 +549,14 @@ class MainActivity : ComponentActivity() {
                         highlighted = false,
                         compact = true,
                         onClick = onSave
+                    )
+
+                    ChromeActionButton(
+                        label = getString(R.string.action_format_short),
+                        enabled = !isRunning,
+                        highlighted = false,
+                        compact = true,
+                        onClick = onFormat
                     )
 
                     ChromeActionButton(
