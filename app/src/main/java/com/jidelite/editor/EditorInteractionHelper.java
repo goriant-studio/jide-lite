@@ -2,6 +2,8 @@ package com.jidelite.editor;
 
 public final class EditorInteractionHelper {
 
+    private static final String DEFAULT_INDENT = "    ";
+
     private EditorInteractionHelper() {
     }
 
@@ -42,6 +44,37 @@ public final class EditorInteractionHelper {
         return new TextMutation(updatedText, selection.getStart());
     }
 
+    public static TextMutation insertSmartNewline(String text, int rawStart, int rawEnd, String indentUnit) {
+        String safeText = text == null ? "" : text;
+        String safeIndent = indentUnit == null || indentUnit.isEmpty() ? DEFAULT_INDENT : indentUnit;
+        SelectionBounds selection = normalizeSelection(safeText.length(), rawStart, rawEnd);
+
+        int lineStart = findLineStart(safeText, selection.getStart());
+        int lineEnd = findLineEnd(safeText, selection.getEndExclusive());
+        String beforeCursorOnLine = safeText.substring(lineStart, selection.getStart());
+        String afterCursorOnLine = safeText.substring(selection.getEndExclusive(), lineEnd);
+        String leadingIndent = leadingWhitespace(beforeCursorOnLine);
+        String beforeTrimmed = beforeCursorOnLine.trim();
+        String afterTrimmed = afterCursorOnLine.trim();
+
+        boolean opensBlock = beforeTrimmed.endsWith("{");
+        boolean closesBlockImmediately = opensBlock && afterTrimmed.startsWith("}");
+        String nextLineIndent = opensBlock ? leadingIndent + safeIndent : leadingIndent;
+
+        StringBuilder insertedText = new StringBuilder();
+        insertedText.append('\n').append(nextLineIndent);
+        int cursorPosition = selection.getStart() + insertedText.length();
+
+        if (closesBlockImmediately) {
+            insertedText.append('\n').append(leadingIndent);
+        }
+
+        String updatedText = safeText.substring(0, selection.getStart())
+                + insertedText
+                + safeText.substring(selection.getEndExclusive());
+        return new TextMutation(updatedText, cursorPosition);
+    }
+
     public static float resizeByDelta(float currentSize, float delta, float minSize, float maxSize) {
         return clampFloat(currentSize + delta, minSize, maxSize);
     }
@@ -62,6 +95,26 @@ public final class EditorInteractionHelper {
             return min;
         }
         return Math.max(min, Math.min(value, max));
+    }
+
+    private static int findLineStart(String text, int index) {
+        int safeIndex = clampInt(index, 0, text.length());
+        int lastBreak = text.lastIndexOf('\n', Math.max(0, safeIndex - 1));
+        return lastBreak < 0 ? 0 : lastBreak + 1;
+    }
+
+    private static int findLineEnd(String text, int index) {
+        int safeIndex = clampInt(index, 0, text.length());
+        int nextBreak = text.indexOf('\n', safeIndex);
+        return nextBreak < 0 ? text.length() : nextBreak;
+    }
+
+    private static String leadingWhitespace(String text) {
+        int index = 0;
+        while (index < text.length() && Character.isWhitespace(text.charAt(index)) && text.charAt(index) != '\n') {
+            index++;
+        }
+        return text.substring(0, index);
     }
 
     public static final class SelectionBounds {

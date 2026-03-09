@@ -1,6 +1,7 @@
 package com.jidelite.ui.main
 
 import android.app.Application
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
@@ -10,21 +11,24 @@ import androidx.lifecycle.AndroidViewModel
 import com.jidelite.R
 import com.jidelite.editor.JavaCodeFormatter
 import com.jidelite.runner.CodeRunner
-import com.jidelite.runner.LocalJavaRunner
 import com.jidelite.storage.FileStorageHelper
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.LazyThreadSafetyMode
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application
     private val fileStorageHelper = FileStorageHelper(app)
-    private val codeRunner: CodeRunner = LocalJavaRunner(app, fileStorageHelper.workspaceDirectory)
     private val javaCodeFormatter = JavaCodeFormatter()
     private val runExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var runnerInitializationError: Throwable? = null
+    private val codeRunner: CodeRunner? by lazy(LazyThreadSafetyMode.NONE) {
+        createCodeRunner()
+    }
 
     var uiState by mutableStateOf(
         MainUiState(
@@ -84,6 +88,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             emitToast(app.getString(R.string.toast_no_file_selected))
             return
         }
+        if (!fileName.endsWith(".java")) {
+            uiState = uiState.copy(statusText = "Format supports Java files only")
+            emitToast("Open a Java file to format")
+            return
+        }
 
         val formattedSource = javaCodeFormatter.format(uiState.editorText)
         if (formattedSource == uiState.editorText) {
@@ -101,8 +110,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onRunRequested() {
+        val selectedPath = uiState.selectedFilePath
         val fileName = uiState.selectedFileName
-        if (fileName.isNullOrBlank()) {
+        if (selectedPath.isNullOrBlank() || fileName.isNullOrBlank()) {
             emitToast(app.getString(R.string.toast_no_file_selected))
             return
         }
@@ -110,17 +120,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!saveCurrentFile(showToast = false)) {
             return
         }
-
-        val sourceSnapshot = uiState.editorText
+        val runner = obtainCodeRunner() ?: return
         uiState = uiState.copy(
             isRunning = true,
+            isResolvingDependencies = false,
             statusText = "Running $fileName",
             terminalText = "Running $fileName..."
         )
 
         runExecutor.execute {
             val presentation = try {
-                RunOutputFormatter.format(codeRunner.runJava(fileName, sourceSnapshot))
+                RunOutputFormatter.format(runner.run(selectedPath))
             } catch (throwable: Throwable) {
                 RunPresentation(
                     statusText = "Run failed",
@@ -135,7 +145,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             mainHandler.post {
-                applyRunPresentation(presentation)
+                applyBackgroundPresentation(presentation)
+            }
+        }
+    }
+
+    fun onResolveDependenciesRequested() {
+        if (!uiState.isMavenProject) {
+            uiState = uiState.copy(statusText = "No pom.xml in workspace")
+            emitToast(app.getString(R.string.toast_no_maven_project))
+            return
+        }
+
+        if (!saveCurrentFile(showToast = false)) {
+            return
+        }
+        val runner = obtainCodeRunner() ?: return
+        uiState = uiState.copy(
+            isRunning = false,
+            isResolvingDependencies = true,
+            statusText = "Resolving Maven dependencies",
+            terminalText = "Resolving Maven dependencies..."
+        )
+
+        runExecutor.execute {
+            val presentation = try {
+                RunOutputFormatter.formatDependencyResolution(runner.resolveDependencies())
+            } catch (throwable: Throwable) {
+                RunPresentation(
+                    statusText = "Dependency resolution failed",
+                    terminalText = buildString {
+                        append("Dependency resolution failed")
+                        append("\n\nInternal resolver error.")
+                        val details = throwable.message.orEmpty().ifBlank {
+                            throwable::class.java.simpleName
+                        }
+                        append("\n\n").append(details)
+                    }
+                )
+            }
+            mainHandler.post {
+                applyBackgroundPresentation(presentation)
             }
         }
     }
@@ -174,28 +224,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (refreshedFiles.isNotEmpty()) {
                 openFile(refreshedFiles.first())
             }
-        } catch (exception: IOException) {
+        } catch (throwable: Throwable) {
             uiState = uiState.copy(
                 statusText = "Workspace error",
-                terminalText = "Workspace initialization failed.\n\n${exception.message.orEmpty()}"
+                terminalText = buildString {
+                    append("Workspace initialization failed.")
+                    append("\n\n")
+                    append(formatThrowableSummary(throwable))
+                }
             )
             emitToast("Could not initialize workspace")
         }
     }
 
     private fun refreshFiles(): List<File> {
-        val listedFiles = fileStorageHelper.listJavaFiles()
-        uiState = uiState.copy(files = listedFiles)
+        val listedFiles = fileStorageHelper.listWorkspaceFiles()
+        uiState = uiState.copy(
+            files = listedFiles,
+            isMavenProject = listedFiles.any { it.name == "pom.xml" }
+        )
         return listedFiles
     }
 
     private fun openFile(file: File) {
         try {
+            val relativePath = fileStorageHelper.toWorkspaceRelativePath(file)
             uiState = uiState.copy(
-                editorText = fileStorageHelper.readFile(file.name),
-                selectedFileName = file.name,
+                editorText = fileStorageHelper.readFile(file),
+                selectedFilePath = file.absolutePath,
                 isDirty = false,
-                statusText = "Editing ${file.name}"
+                statusText = "Editing $relativePath"
             )
         } catch (exception: IOException) {
             uiState = uiState.copy(
@@ -206,10 +264,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun saveCurrentFile(showToast: Boolean): Boolean {
-        val fileName = uiState.selectedFileName ?: return true
+        val selectedPath = uiState.selectedFilePath ?: return true
+        val fileName = uiState.selectedFileName ?: File(selectedPath).name
 
         return try {
-            fileStorageHelper.saveFile(fileName, uiState.editorText)
+            fileStorageHelper.saveFile(File(selectedPath), uiState.editorText)
             uiState = uiState.copy(
                 isDirty = false,
                 statusText = "Saved $fileName"
@@ -227,9 +286,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun applyRunPresentation(presentation: RunPresentation) {
+    private fun applyBackgroundPresentation(presentation: RunPresentation) {
         uiState = uiState.copy(
             isRunning = false,
+            isResolvingDependencies = false,
             statusText = presentation.statusText,
             terminalText = presentation.terminalText
         )
@@ -237,5 +297,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun emitToast(message: String) {
         pendingToastMessage = message
+    }
+
+    private fun obtainCodeRunner(): CodeRunner? {
+        val runner = codeRunner
+        if (runner != null) {
+            return runner
+        }
+
+        val failure = runnerInitializationError
+        uiState = uiState.copy(
+            statusText = "Runner unavailable",
+            terminalText = buildString {
+                append("Runner initialization failed.")
+                if (failure != null) {
+                    append("\n\n")
+                    append(formatThrowableSummary(failure))
+                }
+            }
+        )
+        emitToast("Runner unavailable")
+        return null
+    }
+
+    private fun createCodeRunner(): CodeRunner? {
+        return try {
+            val runnerClass = Class.forName("com.jidelite.runner.LocalJavaRunner")
+            val constructor = runnerClass.getDeclaredConstructor(Context::class.java, File::class.java)
+            val instance = constructor.newInstance(app, fileStorageHelper.workspaceDirectory)
+            instance as CodeRunner
+        } catch (throwable: Throwable) {
+            runnerInitializationError = unwrapReflectionFailure(throwable)
+            null
+        }
+    }
+
+    private fun unwrapReflectionFailure(throwable: Throwable): Throwable {
+        var current = throwable
+        while (true) {
+            val next = current.cause ?: return current
+            current = next
+        }
+    }
+
+    private fun formatThrowableSummary(throwable: Throwable): String {
+        val summary = throwable.message.orEmpty().ifBlank {
+            throwable::class.java.name
+        }
+        return "${throwable::class.java.simpleName}: $summary"
     }
 }

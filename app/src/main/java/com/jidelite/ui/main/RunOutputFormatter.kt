@@ -52,4 +52,33 @@ object RunOutputFormatter {
             terminalText = terminalBuilder.toString()
         )
     }
+
+    fun formatDependencyResolution(runResult: RunResult): RunPresentation {
+        val terminalBuilder = StringBuilder()
+
+        val statusText = if (runResult.isSuccess) {
+            terminalBuilder.append("Dependencies resolved")
+            "Dependencies resolved"
+        } else {
+            terminalBuilder.append("Dependency resolution failed")
+            "Dependency resolution failed"
+        }
+
+        if (runResult.stdout.isNotBlank()) {
+            terminalBuilder.append("\n\n").append(runResult.stdout.trim())
+        }
+
+        if (runResult.stderr.isNotBlank()) {
+            terminalBuilder.append("\n\n").append(runResult.stderr.trim())
+        }
+
+        if (runResult.exitCode >= 0) {
+            terminalBuilder.append("\n\nExit code: ").append(runResult.exitCode)
+        }
+
+        return RunPresentation(
+            statusText = statusText,
+            terminalText = terminalBuilder.toString()
+        )
+    }
 }

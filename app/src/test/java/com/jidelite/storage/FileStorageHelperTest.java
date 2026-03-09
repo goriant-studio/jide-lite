@@ -43,13 +43,17 @@ public class FileStorageHelperTest {
     }
 
     @Test
-    void initializeWorkspaceCreatesMainTemplateWhenEmpty() throws Exception {
+    void initializeWorkspaceCreatesMavenSampleWhenEmpty() throws Exception {
         fileStorageHelper.initializeWorkspace();
 
-        List<File> javaFiles = fileStorageHelper.listJavaFiles();
+        List<File> workspaceFiles = fileStorageHelper.listWorkspaceFiles();
 
-        assertThat(javaFiles).extracting(File::getName).containsExactly("Main.java");
-        assertThat(fileStorageHelper.readFile("Main.java")).contains("Hello from J-IDE Lite");
+        assertThat(workspaceFiles).extracting(fileStorageHelper::toWorkspaceRelativePath)
+                .containsExactly("pom.xml", "src/main/java/demo/Main.java");
+        assertThat(fileStorageHelper.readFile("pom.xml")).contains("<artifactId>commons-lang3</artifactId>");
+        assertThat(fileStorageHelper.readFile("src/main/java/demo/Main.java"))
+                .contains("StringUtils.capitalize")
+                .contains("Loaded: ");
         verify(context).getApplicationContext();
         verify(applicationContext).getFilesDir();
     }
@@ -60,7 +64,34 @@ public class FileStorageHelperTest {
 
         fileStorageHelper.initializeWorkspace();
 
-        assertThat(fileStorageHelper.readFile("Main.java")).isEqualTo("public class Main { }");
+        assertThat(fileStorageHelper.listWorkspaceFiles()).extracting(fileStorageHelper::toWorkspaceRelativePath)
+                .containsExactly("Main.java");
+    }
+
+    @Test
+    void initializeWorkspaceReplacesOriginalSeededMainWithMavenSample() throws Exception {
+        fileStorageHelper.saveFile(
+                "Main.java",
+                "public class Main {\n"
+                        + "    public static void main(String[] args) {\n"
+                        + "        System.out.println(\"Hello from J-IDE Lite\");\n"
+                        + "    }\n"
+                        + "}\n"
+        );
+
+        fileStorageHelper.initializeWorkspace();
+
+        assertThat(fileStorageHelper.listWorkspaceFiles()).extracting(fileStorageHelper::toWorkspaceRelativePath)
+                .containsExactly("pom.xml", "src/main/java/demo/Main.java");
+    }
+
+    @Test
+    void initializeWorkspaceLeavesMavenWorkspaceUntouched() throws Exception {
+        fileStorageHelper.saveFile("pom.xml", "<project/>");
+
+        fileStorageHelper.initializeWorkspace();
+
+        assertThat(fileStorageHelper.listWorkspaceFiles()).extracting(File::getName).containsExactly("pom.xml");
     }
 
     @Test
@@ -73,14 +104,25 @@ public class FileStorageHelperTest {
         List<File> javaFiles = fileStorageHelper.listJavaFiles();
         assertThat(secondFile.getName()).isEqualTo("Main2.java");
         assertThat(thirdFile.getName()).isEqualTo("Main3.java");
-        assertThat(javaFiles).extracting(File::getName).containsExactly("Main.java", "Main2.java", "Main3.java");
+        assertThat(javaFiles).extracting(fileStorageHelper::toWorkspaceRelativePath)
+                .containsExactly("src/main/java/demo/Main.java", "src/main/java/Main2.java", "src/main/java/Main3.java");
+    }
+
+    @Test
+    void createNewJavaFileUsesMavenSourceRootWhenPomExists() throws Exception {
+        fileStorageHelper.saveFile("pom.xml", "<project/>");
+
+        File createdFile = fileStorageHelper.createNewJavaFile();
+
+        assertThat(fileStorageHelper.toWorkspaceRelativePath(createdFile)).isEqualTo("src/main/java/Main.java");
+        assertThat(fileStorageHelper.readFile(createdFile)).contains("Hello from Main");
     }
 
     @Test
     void saveFileAndReadFileRoundTripContent() throws Exception {
-        fileStorageHelper.saveFile("Helper.java", "public class Helper {}\n");
+        fileStorageHelper.saveFile("src/main/java/demo/Helper.java", "public class Helper {}\n");
 
-        String content = fileStorageHelper.readFile("Helper.java");
+        String content = fileStorageHelper.readFile("src/main/java/demo/Helper.java");
 
         assertThat(content).isEqualTo("public class Helper {}");
     }
@@ -96,7 +138,7 @@ public class FileStorageHelperTest {
     void saveFileRejectsInvalidNames() {
         assertThatThrownBy(() -> fileStorageHelper.saveFile("../Main.java", "class Main {}"))
                 .isInstanceOf(Exception.class)
-                .hasMessageContaining("Invalid file name");
+                .hasMessageContaining("Invalid workspace file path");
     }
 
     @Test
@@ -115,5 +157,21 @@ public class FileStorageHelperTest {
         List<File> javaFiles = fileStorageHelper.listJavaFiles();
 
         assertThat(javaFiles).extracting(File::getName).containsExactly("Main.java", "alpha.java", "Zoo.java");
+    }
+
+    @Test
+    void listWorkspaceFilesIncludesPomAndNestedJavaFiles() throws Exception {
+        fileStorageHelper.saveFile("pom.xml", "<project/>");
+        fileStorageHelper.saveFile("src/main/java/demo/App.java", "class App {}\n");
+        fileStorageHelper.saveFile("src/main/java/demo/Helper.java", "class Helper {}\n");
+
+        List<File> files = fileStorageHelper.listWorkspaceFiles();
+        List<String> relativePaths = new java.util.ArrayList<>();
+        for (File file : files) {
+            relativePaths.add(fileStorageHelper.toWorkspaceRelativePath(file));
+        }
+
+        assertThat(relativePaths)
+                .containsExactly("pom.xml", "src/main/java/demo/App.java", "src/main/java/demo/Helper.java");
     }
 }

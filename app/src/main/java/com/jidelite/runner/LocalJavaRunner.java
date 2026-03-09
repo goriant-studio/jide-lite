@@ -9,8 +9,11 @@ import com.android.tools.r8.OutputMode;
 import com.jidelite.model.RunResult;
 
 import org.codehaus.commons.compiler.CompileException;
+import org.codehaus.commons.compiler.util.resource.PathResourceFinder;
 import org.codehaus.janino.ClassLoaderIClassLoader;
 import org.codehaus.janino.Compiler;
+import org.codehaus.janino.IClassLoader;
+import org.codehaus.janino.ResourceFinderIClassLoader;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -33,64 +36,87 @@ import dalvik.system.InMemoryDexClassLoader;
 
 public class LocalJavaRunner implements CodeRunner {
 
-    private static final Pattern SAFE_FILE_NAME = Pattern.compile("^[A-Za-z][A-Za-z0-9_]*\\.java$");
     private static final Pattern PACKAGE_PATTERN =
             Pattern.compile("(?m)^\\s*package\\s+([A-Za-z_$][A-Za-z0-9_$.]*)\\s*;");
+    private static final Pattern MAIN_METHOD_PATTERN = Pattern.compile(
+            "(?s)\\bpublic\\s+static\\s+void\\s+main\\s*\\(\\s*String\\s*(?:\\[\\s*]|\\.\\.\\.)\\s*[A-Za-z_$][A-Za-z0-9_$]*\\s*\\)"
+    );
     private static final int MIN_API_FOR_DEX = 26;
+    private static final String RESOLVE_COMMAND = "$ mvn dependency:resolve";
 
     private final Context appContext;
     private final File workspaceDirectory;
     private final File runnerDirectory;
+    private final ProjectDependencyResolver dependencyResolver;
 
     public LocalJavaRunner(Context context, File workspaceDirectory) {
+        this(context, workspaceDirectory, createDefaultResolver(context));
+    }
+
+    LocalJavaRunner(Context context, File workspaceDirectory, ProjectDependencyResolver dependencyResolver) {
         this.appContext = context.getApplicationContext();
         this.workspaceDirectory = workspaceDirectory;
         this.runnerDirectory = new File(appContext.getCacheDir(), "local-java-runner");
+        this.dependencyResolver = dependencyResolver;
     }
 
     @Override
-    public RunResult runJava(String fileName, String sourceCode) {
-        String safeFileName = fileName == null ? "" : fileName.trim();
-        String safeSourceCode = sourceCode == null ? "" : sourceCode;
-
-        if (!SAFE_FILE_NAME.matcher(safeFileName).matches()) {
-            return new RunResult(false, "", "Unsupported file name: " + safeFileName, 2);
+    public RunResult run(String selectedPath) {
+        File selectedFile;
+        try {
+            selectedFile = resolveSelectedFile(selectedPath);
+        } catch (IOException exception) {
+            return new RunResult(false, "", exception.getMessage(), 2);
         }
 
-        if (safeSourceCode.trim().isEmpty()) {
-            return new RunResult(false, commandTrace(safeFileName), "Source code is empty.", 2);
+        List<File> sourceRoots = discoverSourceRoots();
+        List<File> sourceFiles = listJavaFiles(sourceRoots);
+        if (sourceFiles.isEmpty()) {
+            return new RunResult(false, commandTrace(selectedFile), "No Java source files found to compile.", 1);
+        }
+
+        EntryPoint entryPoint;
+        try {
+            entryPoint = selectEntryPoint(selectedFile, sourceFiles);
+        } catch (IOException exception) {
+            return new RunResult(false, commandTrace(selectedFile), exception.getMessage(), 2);
+        }
+
+        DependencyResolutionResult dependencyResolution;
+        try {
+            dependencyResolution = dependencyResolver.resolve(workspaceDirectory);
+        } catch (IOException exception) {
+            return new RunResult(
+                    false,
+                    commandTrace(entryPoint.sourceFile),
+                    "Dependency resolution failed.\n\n" + exception.getMessage(),
+                    1
+            );
         }
 
         File runRoot = new File(runnerDirectory, "session");
-        File sourcesDir = new File(runRoot, "sources");
         File classesDir = new File(runRoot, "classes");
         File dexDir = new File(runRoot, "dex");
 
         try {
             resetDirectory(runRoot);
-            ensureDirectory(sourcesDir);
             ensureDirectory(classesDir);
             ensureDirectory(dexDir);
-            mirrorWorkspaceSources(sourcesDir, safeFileName, safeSourceCode);
         } catch (IOException exception) {
             return new RunResult(
                     false,
-                    commandTrace(safeFileName),
+                    commandTrace(entryPoint.sourceFile),
                     "Could not prepare runner workspace.\n\n" + exception.getMessage(),
                     1
             );
         }
 
-        List<File> sourceFiles = listJavaFiles(sourcesDir);
-        if (sourceFiles.isEmpty()) {
-            return new RunResult(false, commandTrace(safeFileName), "No Java source files found to compile.", 1);
-        }
-
-        String compileCommand = sourceFiles.size() > 1 ? "$ javac *.java" : commandTrace(safeFileName);
-        String compileOutput;
+        String compileCommand = sourceFiles.size() > 1
+                ? "$ javac " + sourceFiles.size() + " source files"
+                : commandTrace(entryPoint.sourceFile);
 
         try {
-            compileOutput = compileSources(sourceFiles, sourcesDir, classesDir);
+            compileSources(sourceFiles, sourceRoots, classesDir, dependencyResolution.getCompileJars());
         } catch (CompileException exception) {
             String errorText = normalizeCompilerText(exception.getMessage(), "");
             return new RunResult(false, compileCommand, errorText.isEmpty() ? "Compilation failed." : errorText, 1);
@@ -111,10 +137,6 @@ public class LocalJavaRunner implements CodeRunner {
             );
         }
 
-        if (!compileOutput.isEmpty()) {
-            compileOutput = normalizeCompilerText(compileOutput, "");
-        }
-
         List<File> classFiles;
         try {
             classFiles = listClassFiles(classesDir);
@@ -131,7 +153,7 @@ public class LocalJavaRunner implements CodeRunner {
         }
 
         try {
-            dexClasses(classFiles, dexDir);
+            dexClasses(classFiles, dependencyResolution.getRuntimeJars(), dexDir);
         } catch (CompilationFailedException exception) {
             return new RunResult(
                     false,
@@ -141,26 +163,142 @@ public class LocalJavaRunner implements CodeRunner {
             );
         }
 
-        String className = safeFileName.substring(0, safeFileName.length() - 5);
-        String qualifiedMainClass = qualifyClassName(safeSourceCode, className);
-
-        return executeMainClass(compileCommand, qualifiedMainClass, dexDir);
+        return executeMainClass(compileCommand, entryPoint.qualifiedClassName, dexDir);
     }
 
-    private String compileSources(List<File> sourceFiles, File sourcesDir, File classesDir)
-            throws CompileException, IOException {
+    @Override
+    public RunResult resolveDependencies() {
+        File pomFile = new File(workspaceDirectory, "pom.xml");
+        if (!pomFile.exists()) {
+            return new RunResult(false, RESOLVE_COMMAND, "No pom.xml found in workspace.", 1);
+        }
+
+        try {
+            DependencyResolutionResult result = dependencyResolver.resolve(workspaceDirectory);
+            return new RunResult(true, buildDependencyResolutionOutput(result), "", 0);
+        } catch (IOException exception) {
+            return new RunResult(
+                    false,
+                    RESOLVE_COMMAND,
+                    "Dependency resolution failed.\n\n" + exception.getMessage(),
+                    1
+            );
+        }
+    }
+
+    private static ProjectDependencyResolver createDefaultResolver(Context context) {
+        File repositoryDirectory = new File(context.getApplicationContext().getFilesDir(), "m2/repository");
+        return new MavenProjectDependencyResolver(
+                new MavenPomParser(),
+                new HttpMavenRepositoryClient(repositoryDirectory)
+        );
+    }
+
+    private File resolveSelectedFile(String selectedPath) throws IOException {
+        if (selectedPath == null || selectedPath.trim().isEmpty()) {
+            throw new IOException("No file selected.");
+        }
+
+        File rawFile = new File(selectedPath.trim());
+        File targetFile = rawFile.isAbsolute() ? rawFile : new File(workspaceDirectory, selectedPath.trim());
+        String workspacePath = workspaceDirectory.getCanonicalPath();
+        String targetPath = targetFile.getCanonicalPath();
+        if (!targetPath.startsWith(workspacePath + File.separator)) {
+            throw new IOException("Unsupported workspace path: " + selectedPath);
+        }
+        if (!targetFile.exists()) {
+            throw new IOException("Selected file does not exist: " + targetFile.getName());
+        }
+        return targetFile;
+    }
+
+    private List<File> discoverSourceRoots() {
+        File pomFile = new File(workspaceDirectory, "pom.xml");
+        if (pomFile.exists()) {
+            return Arrays.asList(new File(workspaceDirectory, "src/main/java"));
+        }
+        return Arrays.asList(workspaceDirectory);
+    }
+
+    private EntryPoint selectEntryPoint(File selectedFile, List<File> sourceFiles) throws IOException {
+        if (selectedFile.getName().endsWith(".java")) {
+            for (File sourceFile : sourceFiles) {
+                if (sourceFile.getCanonicalPath().equals(selectedFile.getCanonicalPath())) {
+                    String source = readUtf8(sourceFile);
+                    if (!declaresMainMethod(source)) {
+                        throw new IOException("Selected file does not define main(String[] args): " + selectedFile.getName());
+                    }
+                    return new EntryPoint(sourceFile, qualifyClassName(source, classNameFor(sourceFile)));
+                }
+            }
+            throw new IOException("Selected Java file is outside the active source roots: " + selectedFile.getName());
+        }
+
+        List<EntryPoint> mainCandidates = new ArrayList<>();
+        for (File sourceFile : sourceFiles) {
+            String source = readUtf8(sourceFile);
+            if (declaresMainMethod(source)) {
+                mainCandidates.add(new EntryPoint(sourceFile, qualifyClassName(source, classNameFor(sourceFile))));
+            }
+        }
+
+        if (mainCandidates.isEmpty()) {
+            throw new IOException("No runnable main(String[] args) method found in the project.");
+        }
+        if (mainCandidates.size() == 1) {
+            return mainCandidates.get(0);
+        }
+
+        for (EntryPoint candidate : mainCandidates) {
+            if ("Main.java".equals(candidate.sourceFile.getName())) {
+                return candidate;
+            }
+        }
+        throw new IOException("Multiple runnable classes found. Open a Java file with main(String[] args) before running.");
+    }
+
+    private boolean declaresMainMethod(String sourceCode) {
+        return MAIN_METHOD_PATTERN.matcher(sourceCode).find();
+    }
+
+    private String classNameFor(File sourceFile) {
+        String name = sourceFile.getName();
+        return name.endsWith(".java") ? name.substring(0, name.length() - 5) : name;
+    }
+
+    private String readUtf8(File file) throws IOException {
+        return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+    }
+
+    private void compileSources(
+            List<File> sourceFiles,
+            List<File> sourceRoots,
+            File classesDir,
+            List<File> compileJars
+    ) throws CompileException, IOException {
         Compiler compiler = new Compiler();
         compiler.setSourceVersion(8);
         compiler.setTargetVersion(8);
         compiler.setEncoding(StandardCharsets.UTF_8);
-        compiler.setSourcePath(new File[]{sourcesDir});
+        compiler.setSourcePath(sourceRoots.toArray(new File[0]));
         compiler.setDestinationDirectory(classesDir, false);
-        compiler.setIClassLoader(new ClassLoaderIClassLoader(appContext.getClassLoader()));
+        compiler.setIClassLoader(buildCompilerClassLoader(compileJars));
         compiler.compile(sourceFiles.toArray(new File[0]));
-        return "";
     }
 
-    private void dexClasses(List<File> classFiles, File dexDir) throws CompilationFailedException {
+    private IClassLoader buildCompilerClassLoader(List<File> compileJars) {
+        ClassLoader parentClassLoader = appContext.getClassLoader();
+        if (parentClassLoader == null) {
+            parentClassLoader = LocalJavaRunner.class.getClassLoader();
+        }
+        IClassLoader parent = new ClassLoaderIClassLoader(parentClassLoader);
+        if (compileJars == null || compileJars.isEmpty()) {
+            return parent;
+        }
+        return new ResourceFinderIClassLoader(new PathResourceFinder(compileJars.toArray(new File[0])), parent);
+    }
+
+    private void dexClasses(List<File> classFiles, List<File> runtimeJars, File dexDir) throws CompilationFailedException {
         D8Command.Builder builder = D8Command.builder()
                 .setMinApiLevel(MIN_API_FOR_DEX)
                 .setDisableDesugaring(true)
@@ -169,17 +307,20 @@ public class LocalJavaRunner implements CodeRunner {
         for (File classFile : classFiles) {
             builder.addProgramFiles(classFile.toPath());
         }
+        for (File jarFile : runtimeJars) {
+            builder.addProgramFiles(jarFile.toPath());
+        }
 
         D8.run(builder.build());
     }
 
     private RunResult executeMainClass(String compileCommand, String mainClassName, File dexDir) {
-        File dexFile = new File(dexDir, "classes.dex");
-        if (!dexFile.exists()) {
+        List<File> dexFiles = listDexFiles(dexDir);
+        if (dexFiles.isEmpty()) {
             return new RunResult(
                     false,
                     compileCommand + "\nCompile success.",
-                    "Dex conversion completed but classes.dex was not created.",
+                    "Dex conversion completed but no dex files were created.",
                     1
             );
         }
@@ -190,9 +331,16 @@ public class LocalJavaRunner implements CodeRunner {
         PrintStream originalErr = System.err;
 
         try {
-            byte[] dexBytes = Files.readAllBytes(dexFile.toPath());
-            InMemoryDexClassLoader classLoader =
-                    new InMemoryDexClassLoader(ByteBuffer.wrap(dexBytes), appContext.getClassLoader());
+            ByteBuffer[] dexBuffers = new ByteBuffer[dexFiles.size()];
+            for (int index = 0; index < dexFiles.size(); index++) {
+                dexBuffers[index] = ByteBuffer.wrap(Files.readAllBytes(dexFiles.get(index).toPath()));
+            }
+
+            ClassLoader parentClassLoader = appContext.getClassLoader();
+            if (parentClassLoader == null) {
+                parentClassLoader = LocalJavaRunner.class.getClassLoader();
+            }
+            InMemoryDexClassLoader classLoader = new InMemoryDexClassLoader(dexBuffers, parentClassLoader);
             Class<?> mainClass = classLoader.loadClass(mainClassName);
             Method mainMethod = mainClass.getMethod("main", String[].class);
 
@@ -266,32 +414,28 @@ public class LocalJavaRunner implements CodeRunner {
         return new RunResult(success, stdout.toString(), runtimeStderr, success ? 0 : 1);
     }
 
-    private void mirrorWorkspaceSources(File sourcesDir, String selectedFileName, String selectedSource) throws IOException {
-        ensureDirectory(sourcesDir);
-
-        if (workspaceDirectory != null && workspaceDirectory.exists()) {
-            List<File> workspaceFiles = listJavaFiles(workspaceDirectory);
-            for (File workspaceFile : workspaceFiles) {
-                byte[] bytes = Files.readAllBytes(workspaceFile.toPath());
-                Files.write(new File(sourcesDir, workspaceFile.getName()).toPath(), bytes);
-            }
+    private List<File> listJavaFiles(List<File> sourceRoots) {
+        List<File> javaFiles = new ArrayList<>();
+        for (File sourceRoot : sourceRoots) {
+            collectJavaFiles(sourceRoot, javaFiles);
         }
-
-        Files.write(
-                new File(sourcesDir, selectedFileName).toPath(),
-                selectedSource.getBytes(StandardCharsets.UTF_8)
-        );
+        javaFiles.sort(Comparator.comparing(File::getAbsolutePath));
+        return javaFiles;
     }
 
-    private List<File> listJavaFiles(File directory) {
-        File[] files = directory.listFiles((dir, name) -> name.endsWith(".java"));
+    private void collectJavaFiles(File directory, List<File> javaFiles) {
+        File[] files = directory.listFiles();
         if (files == null) {
-            return new ArrayList<>();
+            return;
         }
 
-        List<File> javaFiles = new ArrayList<>(Arrays.asList(files));
-        javaFiles.sort(Comparator.comparing(File::getName, String.CASE_INSENSITIVE_ORDER));
-        return javaFiles;
+        for (File file : files) {
+            if (file.isDirectory()) {
+                collectJavaFiles(file, javaFiles);
+            } else if (file.getName().endsWith(".java")) {
+                javaFiles.add(file);
+            }
+        }
     }
 
     private List<File> listClassFiles(File directory) throws IOException {
@@ -311,6 +455,16 @@ public class LocalJavaRunner implements CodeRunner {
 
         classFiles.sort(Comparator.comparing(File::getAbsolutePath));
         return classFiles;
+    }
+
+    private List<File> listDexFiles(File directory) {
+        File[] files = directory.listFiles((dir, name) -> name.endsWith(".dex"));
+        if (files == null) {
+            return new ArrayList<>();
+        }
+        List<File> dexFiles = new ArrayList<>(Arrays.asList(files));
+        dexFiles.sort(Comparator.comparing(File::getName));
+        return dexFiles;
     }
 
     private void resetDirectory(File directory) throws IOException {
@@ -368,7 +522,34 @@ public class LocalJavaRunner implements CodeRunner {
         return builder.toString().trim();
     }
 
-    private String commandTrace(String fileName) {
-        return "$ javac " + fileName;
+    private String commandTrace(File sourceFile) {
+        return "$ javac " + sourceFile.getName();
+    }
+
+    private String buildDependencyResolutionOutput(DependencyResolutionResult result) {
+        StringBuilder builder = new StringBuilder();
+        builder.append(RESOLVE_COMMAND);
+        builder.append("\nResolve success.");
+        builder.append("\nCompile jars: ").append(result.getCompileJars().size());
+        builder.append("\nRuntime jars: ").append(result.getRuntimeJars().size());
+
+        if (!result.getRuntimeJars().isEmpty()) {
+            builder.append("\n\nRuntime artifacts:");
+            for (File jarFile : result.getRuntimeJars()) {
+                builder.append("\n- ").append(jarFile.getName());
+            }
+        }
+
+        return builder.toString();
+    }
+
+    private static final class EntryPoint {
+        private final File sourceFile;
+        private final String qualifiedClassName;
+
+        private EntryPoint(File sourceFile, String qualifiedClassName) {
+            this.sourceFile = sourceFile;
+            this.qualifiedClassName = qualifiedClassName;
+        }
     }
 }

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 
 public class EditorInteractionHelperTest {
 
+    private static final String INDENT = "    ";
+
     @Test
     void normalizeSelectionSortsAndClampsBounds() {
         EditorInteractionHelper.SelectionBounds bounds =
@@ -55,6 +57,33 @@ public class EditorInteractionHelperTest {
 
         assertThat(mutation.getText()).isEqualTo("hello");
         assertThat(mutation.getCursorPosition()).isEqualTo(5);
+    }
+
+    @Test
+    void insertSmartNewlineKeepsCurrentLineIndent() {
+        EditorInteractionHelper.TextMutation mutation =
+                EditorInteractionHelper.insertSmartNewline("    int value = 1;", 18, 18, INDENT);
+
+        assertThat(mutation.getText()).isEqualTo("    int value = 1;\n    ");
+        assertThat(mutation.getCursorPosition()).isEqualTo(23);
+    }
+
+    @Test
+    void insertSmartNewlineAddsExtraIndentAfterOpeningBrace() {
+        EditorInteractionHelper.TextMutation mutation =
+                EditorInteractionHelper.insertSmartNewline("if (ready) {", 12, 12, INDENT);
+
+        assertThat(mutation.getText()).isEqualTo("if (ready) {\n    ");
+        assertThat(mutation.getCursorPosition()).isEqualTo(17);
+    }
+
+    @Test
+    void insertSmartNewlineSplitsBracePairIntoIndentedBlock() {
+        EditorInteractionHelper.TextMutation mutation =
+                EditorInteractionHelper.insertSmartNewline("if (ready) {}", 12, 12, INDENT);
+
+        assertThat(mutation.getText()).isEqualTo("if (ready) {\n    \n}");
+        assertThat(mutation.getCursorPosition()).isEqualTo(17);
     }
 
     @Test

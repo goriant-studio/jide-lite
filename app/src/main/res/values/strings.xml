@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">J-IDE Lite</string>
-    <string name="app_version">v1.2</string>
+    <string name="app_version">v1.3</string>
     <string name="app_name_short">J-IDE</string>
     <string name="action_new_file">New File</string>
     <string name="action_new_short">New</string>
+    <string name="action_resolve_dependencies">Resolve Dependencies</string>
+    <string name="action_resolve_short">Deps</string>
     <string name="action_save">Save</string>
     <string name="action_format">Format</string>
     <string name="action_format_short">Beautify</string>
@@ -20,7 +22,7 @@
     <string name="editor_hint">Start writing Java…</string>
     <string name="terminal_title">Terminal</string>
     <string name="terminal_ready">Ready.</string>
-    <string name="terminal_intro">J-IDE Lite v1.2 - Local Java runner</string>
+    <string name="terminal_intro">J-IDE Lite v1.3 - Local Java runner</string>
     <string name="terminal_workspace_prefix">Workspace:</string>
     <string name="status_ready">Offline Java workspace - local runner</string>
     <string name="status_formatted">Formatted %1$s</string>
@@ -32,5 +34,6 @@
     <string name="file_meta_active">Active Java file</string>
     <string name="toast_formatted">Formatted</string>
     <string name="toast_format_no_changes">No format changes</string>
+    <string name="toast_no_maven_project">No pom.xml found</string>
     <string name="toast_no_file_selected">No file selected</string>
 </resources>

@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -58,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +89,7 @@ import java.io.File
 
 private const val DEFAULT_EXPLORER_WIDTH = 228f
 private const val DEFAULT_TERMINAL_HEIGHT = 188f
+private const val EDITOR_INDENT = "    "
 private val CollapsedExplorerWidth = 68.dp
 private val ExplorerHandleWidth = 12.dp
 private val TerminalHandleHeight = 12.dp
@@ -116,6 +119,7 @@ fun MainRoute(
         uiState = uiState,
         syntaxHighlighter = syntaxHighlighter,
         onNewFile = viewModel::onNewFileRequested,
+        onResolveDependencies = viewModel::onResolveDependenciesRequested,
         onSave = viewModel::onSaveRequested,
         onFormat = viewModel::onFormatRequested,
         onRun = viewModel::onRunRequested,
@@ -132,6 +136,7 @@ private fun MainScreen(
     uiState: MainUiState,
     syntaxHighlighter: JavaSyntaxHighlighter,
     onNewFile: () -> Unit,
+    onResolveDependencies: () -> Unit,
     onSave: () -> Unit,
     onFormat: () -> Unit,
     onRun: () -> Unit,
@@ -180,9 +185,11 @@ private fun MainScreen(
                 statusText = uiState.statusText,
                 selectedFileName = uiState.selectedFileName,
                 fileCount = uiState.files.size,
-                isRunning = uiState.isRunning,
+                isBusy = uiState.isBusy,
+                canResolveDependencies = uiState.isMavenProject,
                 isExplorerCollapsed = isExplorerCollapsed,
                 onNewFile = onNewFile,
+                onResolveDependencies = onResolveDependencies,
                 onSave = onSave,
                 onFormat = onFormat,
                 onRun = onRun,
@@ -225,8 +232,9 @@ private fun MainScreen(
                             .width(effectiveExplorerWidth)
                             .fillMaxHeight(),
                         collapsed = isExplorerCollapsed,
+                        workspacePath = uiState.workspacePath,
                         files = uiState.files,
-                        selectedFileName = uiState.selectedFileName,
+                        selectedFilePath = uiState.selectedFilePath,
                         onToggleCollapse = { isExplorerCollapsed = !isExplorerCollapsed },
                         onOpenFile = onOpenFile
                     )
@@ -320,9 +328,11 @@ private fun TopBar(
     statusText: String,
     selectedFileName: String?,
     fileCount: Int,
-    isRunning: Boolean,
+    isBusy: Boolean,
+    canResolveDependencies: Boolean,
     isExplorerCollapsed: Boolean,
     onNewFile: () -> Unit,
+    onResolveDependencies: () -> Unit,
     onSave: () -> Unit,
     onFormat: () -> Unit,
     onRun: () -> Unit,
@@ -383,6 +393,7 @@ private fun TopBar(
                     enabled = true,
                     highlighted = false,
                     compact = true,
+                    testTag = "topbar-toggle",
                     onClick = onToggleCollapse
                 )
 
@@ -391,38 +402,52 @@ private fun TopBar(
                     enabled = true,
                     highlighted = false,
                     compact = true,
+                    testTag = "topbar-side",
                     onClick = onToggleExplorer
                 )
 
                 ChromeActionButton(
                     label = stringResource(R.string.action_new_short).uppercase(),
-                    enabled = !isRunning,
+                    enabled = !isBusy,
                     highlighted = false,
                     compact = true,
+                    testTag = "topbar-new",
                     onClick = onNewFile
                 )
 
                 ChromeActionButton(
-                    label = stringResource(R.string.action_save).uppercase(),
-                    enabled = !isRunning,
+                    label = stringResource(R.string.action_resolve_short).uppercase(),
+                    enabled = !isBusy && canResolveDependencies,
                     highlighted = false,
                     compact = true,
+                    testTag = "topbar-resolve",
+                    onClick = onResolveDependencies
+                )
+
+                ChromeActionButton(
+                    label = stringResource(R.string.action_save).uppercase(),
+                    enabled = !isBusy,
+                    highlighted = false,
+                    compact = true,
+                    testTag = "topbar-save",
                     onClick = onSave
                 )
 
                 ChromeActionButton(
                     label = stringResource(R.string.action_format_short).uppercase(),
-                    enabled = !isRunning,
+                    enabled = !isBusy,
                     highlighted = false,
                     compact = true,
+                    testTag = "topbar-format",
                     onClick = onFormat
                 )
 
                 ChromeActionButton(
                     label = stringResource(R.string.action_run).uppercase(),
-                    enabled = !isRunning,
+                    enabled = !isBusy,
                     highlighted = true,
                     compact = true,
+                    testTag = "topbar-run",
                     onClick = onRun
                 )
             }
@@ -468,6 +493,7 @@ private fun ChromeActionButton(
     enabled: Boolean,
     highlighted: Boolean,
     compact: Boolean,
+    testTag: String? = null,
     onClick: () -> Unit
 ) {
     val shape = RoundedCornerShape(8.dp)
@@ -479,6 +505,7 @@ private fun ChromeActionButton(
             .alpha(if (enabled) 1f else 0.55f)
             .clip(shape)
             .background(containerColor)
+            .then(if (testTag == null) Modifier else Modifier.testTag(testTag))
             .then(
                 if (highlighted) {
                     Modifier
@@ -508,8 +535,9 @@ private fun ChromeActionButton(
 private fun ExplorerPane(
     modifier: Modifier,
     collapsed: Boolean,
+    workspacePath: String,
     files: List<File>,
-    selectedFileName: String?,
+    selectedFilePath: String?,
     onToggleCollapse: () -> Unit,
     onOpenFile: (File) -> Unit
 ) {
@@ -555,10 +583,10 @@ private fun ExplorerPane(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        items(files, key = { it.name }) { file ->
+                        items(files, key = { workspaceRelativePath(workspacePath, it) }) { file ->
                             CollapsedExplorerFilePill(
                                 label = compactFileLabel(file.name),
-                                selected = file.name == selectedFileName,
+                                selected = file.absolutePath == selectedFilePath,
                                 onClick = { onOpenFile(file) }
                             )
                         }
@@ -622,10 +650,11 @@ private fun ExplorerPane(
                             .padding(top = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(1.dp)
                     ) {
-                        items(files, key = { it.name }) { file ->
+                        items(files, key = { workspaceRelativePath(workspacePath, it) }) { file ->
                             ExplorerFileRow(
                                 file = file,
-                                selected = file.name == selectedFileName,
+                                workspacePath = workspacePath,
+                                selected = file.absolutePath == selectedFilePath,
                                 onClick = { onOpenFile(file) }
                             )
                         }
@@ -664,6 +693,7 @@ private fun CollapsedExplorerFilePill(
 @Composable
 private fun ExplorerFileRow(
     file: File,
+    workspacePath: String,
     selected: Boolean,
     onClick: () -> Unit
 ) {
@@ -685,7 +715,7 @@ private fun ExplorerFileRow(
         Spacer(modifier = Modifier.width(14.dp))
 
         Text(
-            text = file.name,
+            text = workspaceRelativePath(workspacePath, file),
             color = if (selected) PrimaryAccent else MaterialTheme.colorScheme.onSurface,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
@@ -693,6 +723,18 @@ private fun ExplorerFileRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+private fun workspaceRelativePath(workspacePath: String, file: File): String {
+    if (workspacePath.isBlank()) {
+        return file.name
+    }
+
+    return try {
+        file.relativeTo(File(workspacePath)).invariantSeparatorsPath
+    } catch (_: IllegalArgumentException) {
+        file.name
     }
 }
 
@@ -998,39 +1040,41 @@ private fun TerminalPane(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(horizontal = 18.dp, vertical = 12.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.terminal_intro),
-                color = TerminalInfo,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
+        SelectionContainer {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.terminal_intro),
+                    color = TerminalInfo,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
 
-            Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-            Text(
-                text = "${stringResource(R.string.terminal_workspace_prefix)} $workspacePath",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                lineHeight = 16.sp
-            )
+                Text(
+                    text = "${stringResource(R.string.terminal_workspace_prefix)} $workspacePath",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
 
-            Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-            Text(
-                text = terminalText,
-                color = terminalColor,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
+                Text(
+                    text = terminalText,
+                    color = terminalColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
         }
     }
 }
@@ -1206,7 +1250,12 @@ private fun handleEditorShortcut(
 
     return when {
         keyCode == KeyEvent.KEYCODE_TAB -> {
-            insertTwoSpaceIndent(editText)
+            insertIndentUnit(editText)
+            true
+        }
+
+        keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+            insertSmartNewline(editText)
             true
         }
 
@@ -1248,16 +1297,17 @@ private fun compactFileLabel(fileName: String): String {
     }
 }
 
-private fun insertTwoSpaceIndent(editText: EditText) {
+private fun insertIndentUnit(editText: EditText) {
     val editable = editText.text ?: return
     val selectionStart = editText.selectionStart.coerceAtLeast(0)
     val selectionEnd = editText.selectionEnd.coerceAtLeast(0)
     val start = minOf(selectionStart, selectionEnd)
     val end = maxOf(selectionStart, selectionEnd)
+    val indentWidth = EDITOR_INDENT.length
 
     if (start == end) {
-        editable.insert(start, "  ")
-        editText.setSelection(start + 2)
+        editable.insert(start, EDITOR_INDENT)
+        editText.setSelection(start + indentWidth)
         return
     }
 
@@ -1266,9 +1316,21 @@ private fun insertTwoSpaceIndent(editText: EditText) {
         if (index == -1) 0 else index + 1
     }
     val selectedBlock = currentText.substring(firstLineStart, end)
-    val indentedBlock = "  " + selectedBlock.replace("\n", "\n  ")
+    val indentedBlock = EDITOR_INDENT + selectedBlock.replace("\n", "\n$EDITOR_INDENT")
     val insertedSpaces = indentedBlock.length - selectedBlock.length
 
     editable.replace(firstLineStart, end, indentedBlock)
-    editText.setSelection(start + 2, end + insertedSpaces)
+    editText.setSelection(start + indentWidth, end + insertedSpaces)
+}
+
+private fun insertSmartNewline(editText: EditText) {
+    val editable = editText.text ?: return
+    val mutation = EditorInteractionHelper.insertSmartNewline(
+        editable.toString(),
+        editText.selectionStart,
+        editText.selectionEnd,
+        EDITOR_INDENT
+    )
+    editable.replace(0, editable.length, mutation.text)
+    editText.setSelection(mutation.cursorPosition)
 }

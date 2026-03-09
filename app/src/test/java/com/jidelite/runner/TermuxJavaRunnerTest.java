@@ -9,10 +9,10 @@ import org.junit.jupiter.api.Test;
 public class TermuxJavaRunnerTest {
 
     @Test
-    void runJavaTrimsFileNameAndBuildsCommandTrace() {
+    void runBuildsCommandTraceFromSelectedPath() {
         TermuxJavaRunner runner = new TermuxJavaRunner();
 
-        RunResult result = runner.runJava(" Demo.java ", "class Demo {}");
+        RunResult result = runner.run(" Demo.java ");
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getExitCode()).isEqualTo(126);
@@ -22,20 +22,20 @@ public class TermuxJavaRunnerTest {
     }
 
     @Test
-    void runJavaFallsBackToMainWhenExtensionIsMissing() {
+    void runFallsBackToMainWhenExtensionIsMissing() {
         TermuxJavaRunner runner = new TermuxJavaRunner();
 
-        RunResult result = runner.runJava("Scratch", "class Scratch {}");
+        RunResult result = runner.run("Scratch");
 
         assertThat(result.getStdout()).isEqualTo("$ javac Scratch\n$ java Main");
         assertThat(result.getExitCode()).isEqualTo(126);
     }
 
     @Test
-    void runJavaUsesDefaultMainFileWhenNameIsNull() {
+    void runUsesDefaultMainFileWhenSelectionIsNull() {
         TermuxJavaRunner runner = new TermuxJavaRunner();
 
-        RunResult result = runner.runJava(null, "class Main {}");
+        RunResult result = runner.run(null);
 
         assertThat(result.getStdout()).isEqualTo("$ javac Main.java\n$ java Main");
         assertThat(result.getExitCode()).isEqualTo(126);
