@@ -62,15 +62,24 @@ dependencies {
     implementation 'org.codehaus.janino:commons-compiler:3.1.12'
     implementation 'org.codehaus.janino:janino:3.1.12'
 
-    def preferredD8Jar = file("${android.sdkDirectory}/build-tools/34.0.0/lib/d8.jar")
-    def d8Jar = preferredD8Jar
-    if (!d8Jar.exists()) {
-        def candidates = fileTree(dir: "${android.sdkDirectory}/build-tools", include: ['*/lib/d8.jar']).files.toList().sort()
-        if (!candidates.isEmpty()) {
-            d8Jar = candidates.last()
+    // Prefer the newest available build-tools D8. Older 34.0.0 builds crash on some modern jars
+    // such as commons-lang3-3.14.0 during dexing, while newer D8 releases handle them correctly.
+    def candidates = fileTree(dir: "${android.sdkDirectory}/build-tools", include: ['*/lib/d8.jar']).files.toList()
+    candidates.sort { left, right ->
+        def leftVersion = left.parentFile.parentFile.name.tokenize('.').collect { it as int }
+        def rightVersion = right.parentFile.parentFile.name.tokenize('.').collect { it as int }
+        def maxSize = Math.max(leftVersion.size(), rightVersion.size())
+        for (int index = 0; index < maxSize; index++) {
+            def leftPart = index < leftVersion.size() ? leftVersion[index] : 0
+            def rightPart = index < rightVersion.size() ? rightVersion[index] : 0
+            if (leftPart != rightPart) {
+                return leftPart <=> rightPart
+            }
         }
+        return 0
     }
-    if (!d8Jar.exists()) {
+    def d8Jar = candidates.isEmpty() ? null : candidates.last()
+    if (d8Jar == null || !d8Jar.exists()) {
         throw new GradleException("Could not find d8.jar in the Android SDK build-tools directory.")
     }
     implementation files(d8Jar)

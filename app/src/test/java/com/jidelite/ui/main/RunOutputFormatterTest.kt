@@ -7,50 +7,36 @@ import org.junit.jupiter.api.Test
 class RunOutputFormatterTest {
 
     @Test
-    fun formatMarksSuccessfulRuns() {
-        val presentation = RunOutputFormatter.format(
+    fun formatDependencyResolutionUsesResolveLabelsOnSuccess() {
+        val presentation = RunOutputFormatter.formatDependencyResolution(
             RunResult(
                 true,
-                "$ javac Main.java\nCompile success.\n$ java Main\n\nHello",
+                "\$ mvn dependency:resolve\nResolve success.",
                 "",
                 0
             )
         )
 
-        assertThat(presentation.statusText).isEqualTo("Run finished")
-        assertThat(presentation.terminalText).contains("Compile success")
+        assertThat(presentation.statusText).isEqualTo("Dependencies resolved")
+        assertThat(presentation.terminalText).contains("Dependencies resolved")
+        assertThat(presentation.terminalText).contains("\$ mvn dependency:resolve")
         assertThat(presentation.terminalText).contains("Exit code: 0")
     }
 
     @Test
-    fun formatMarksFailedRuns() {
-        val presentation = RunOutputFormatter.format(
+    fun formatDependencyResolutionUsesFailureLabelsOnError() {
+        val presentation = RunOutputFormatter.formatDependencyResolution(
             RunResult(
                 false,
-                "$ javac Main.java",
-                "Compilation failed",
+                "\$ mvn dependency:resolve",
+                "Dependency resolution failed.\n\nBoom",
                 1
             )
         )
 
-        assertThat(presentation.statusText).isEqualTo("Run failed")
-        assertThat(presentation.terminalText).contains("Run failed")
-        assertThat(presentation.terminalText).contains("Compilation failed")
-    }
-
-    @Test
-    fun formatMarksSimulatedRuns() {
-        val presentation = RunOutputFormatter.format(
-            RunResult(
-                false,
-                "[placeholder runner]",
-                "",
-                -1
-            )
-        )
-
-        assertThat(presentation.statusText).isEqualTo("Placeholder runner")
-        assertThat(presentation.terminalText).contains("Simulated run")
-        assertThat(presentation.terminalText).contains("Execution mode: simulated")
+        assertThat(presentation.statusText).isEqualTo("Dependency resolution failed")
+        assertThat(presentation.terminalText).contains("Dependency resolution failed")
+        assertThat(presentation.terminalText).contains("Boom")
+        assertThat(presentation.terminalText).contains("Exit code: 1")
     }
 }

@@ -301,7 +301,6 @@ public class LocalJavaRunner implements CodeRunner {
     private void dexClasses(List<File> classFiles, List<File> runtimeJars, File dexDir) throws CompilationFailedException {
         D8Command.Builder builder = D8Command.builder()
                 .setMinApiLevel(MIN_API_FOR_DEX)
-                .setDisableDesugaring(true)
                 .setOutput(dexDir.toPath(), OutputMode.DexIndexed);
 
         for (File classFile : classFiles) {

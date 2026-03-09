@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 
 @ExtendWith(MockitoExtension.class)
 public class LocalJavaRunnerTest {
@@ -234,6 +235,61 @@ public class LocalJavaRunnerTest {
                 .contains("Multiple runnable classes found");
     }
 
+    @Test
+    void resolveDependenciesRejectsWorkspaceWithoutPom() {
+        RunResult result = localJavaRunner.resolveDependencies();
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getStdout()).isEqualTo("$ mvn dependency:resolve");
+        assertThat(result.getStderr()).isEqualTo("No pom.xml found in workspace.");
+        assertThat(result.getExitCode()).isEqualTo(1);
+    }
+
+    @Test
+    void resolveDependenciesReportsResolvedArtifacts() throws Exception {
+        Files.write(new File(workspaceDirectory, "pom.xml").toPath(), "<project/>".getBytes(StandardCharsets.UTF_8));
+        File compileJar = new File(rootDirectory, "compile.jar");
+        File runtimeJar = new File(rootDirectory, "runtime.jar");
+        Files.write(compileJar.toPath(), new byte[0]);
+        Files.write(runtimeJar.toPath(), new byte[0]);
+
+        LocalJavaRunner runner = new LocalJavaRunner(
+                context,
+                workspaceDirectory,
+                new FixedDependencyResolver(new DependencyResolutionResult(
+                        Collections.singletonList(compileJar),
+                        Collections.singletonList(runtimeJar)
+                ))
+        );
+
+        RunResult result = runner.resolveDependencies();
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getExitCode()).isEqualTo(0);
+        assertThat(result.getStdout()).contains("$ mvn dependency:resolve");
+        assertThat(result.getStdout()).contains("Compile jars: 1");
+        assertThat(result.getStdout()).contains("Runtime jars: 1");
+        assertThat(result.getStdout()).contains("- runtime.jar");
+        assertThat(result.getStderr()).isEmpty();
+    }
+
+    @Test
+    void dexClassesSupportsCommonsLangRuntimeJar() throws Exception {
+        File lambdaJar = findCommonsLangJar();
+        File dexDir = new File(rootDirectory, "dex-output");
+        assertThat(dexDir.mkdirs()).isTrue();
+
+        invokePrivate(
+                "dexClasses",
+                new Class<?>[]{List.class, List.class, File.class},
+                Collections.emptyList(),
+                Collections.singletonList(lambdaJar),
+                dexDir
+        );
+
+        assertThat(dexDir.listFiles((dir, name) -> name.endsWith(".dex"))).isNotEmpty();
+    }
+
     private File writeSource(String relativePath, String content) throws Exception {
         File file = new File(workspaceDirectory, relativePath);
         File parent = file.getParentFile();
@@ -273,6 +329,18 @@ public class LocalJavaRunnerTest {
         return field.get(target);
     }
 
+    private File findCommonsLangJar() throws Exception {
+        Path gradleHome = new File(System.getProperty("user.home"), ".gradle").toPath();
+        try (Stream<Path> candidates = Files.walk(gradleHome)) {
+            Path jarPath = candidates
+                    .filter(Files::isRegularFile)
+                    .filter(path -> "commons-lang3-3.14.0.jar".equals(path.getFileName().toString()))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Could not locate commons-lang3-3.14.0.jar under ~/.gradle"));
+            return jarPath.toFile();
+        }
+    }
+
     private interface ThrowingRunnable {
         void run() throws Throwable;
     }
@@ -281,6 +349,19 @@ public class LocalJavaRunnerTest {
         @Override
         public DependencyResolutionResult resolve(File workspaceDirectory) {
             return DependencyResolutionResult.empty();
+        }
+    }
+
+    private static final class FixedDependencyResolver implements ProjectDependencyResolver {
+        private final DependencyResolutionResult result;
+
+        private FixedDependencyResolver(DependencyResolutionResult result) {
+            this.result = result;
+        }
+
+        @Override
+        public DependencyResolutionResult resolve(File workspaceDirectory) {
+            return result;
         }
     }
 }

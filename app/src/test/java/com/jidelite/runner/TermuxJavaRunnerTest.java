@@ -40,4 +40,17 @@ public class TermuxJavaRunnerTest {
         assertThat(result.getStdout()).isEqualTo("$ javac Main.java\n$ java Main");
         assertThat(result.getExitCode()).isEqualTo(126);
     }
+
+    @Test
+    void resolveDependenciesReportsTermuxRunnerDisabled() {
+        TermuxJavaRunner runner = new TermuxJavaRunner();
+
+        RunResult result = runner.resolveDependencies();
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getStdout()).isEqualTo("$ mvn dependency:resolve");
+        assertThat(result.getStderr())
+                .isEqualTo("Termux runner is disabled. J-IDE Lite now uses the local embedded runner instead.");
+        assertThat(result.getExitCode()).isEqualTo(126);
+    }
 }
