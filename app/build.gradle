@@ -34,15 +34,15 @@ if (!hasReleaseSigning) {
 
 android {
     namespace = 'com.goriant.jidelite'
-    compileSdk = 35
+    compileSdk 36
 
     defaultConfig {
         applicationId = "com.goriant.jidelite"
         testApplicationId = "com.goriant.jidelite.test"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        targetSdk = 36
+        versionCode = 6
+        versionName = "1.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
