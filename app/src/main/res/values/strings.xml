@@ -1,19 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">J-IDE Lite</string>
+    <string name="app_version">v1.1</string>
+    <string name="app_name_short">J-IDE</string>
     <string name="action_new_file">New File</string>
+    <string name="action_new_short">New</string>
     <string name="action_save">Save</string>
     <string name="action_run">Run</string>
     <string name="action_clear">Clear</string>
     <string name="explorer_title">Project</string>
+    <string name="explorer_header">EXPLORER</string>
+    <string name="workspace_label">WORKSPACE</string>
     <string name="explorer_empty">No Java files yet</string>
     <string name="editor_empty_title">No file selected</string>
     <string name="editor_meta_saved">Saved locally</string>
     <string name="editor_meta_unsaved">Unsaved changes</string>
     <string name="editor_hint">Start writing Java…</string>
     <string name="terminal_title">Terminal</string>
-    <string name="terminal_ready">Ready</string>
-    <string name="status_ready">Offline Java workspace</string>
+    <string name="terminal_ready">Ready.</string>
+    <string name="terminal_intro">J-IDE Lite v1.1 - Local Java runner</string>
+    <string name="terminal_workspace_prefix">Workspace:</string>
+    <string name="status_ready">Offline Java workspace - local runner</string>
     <string name="file_count_zero">0 files</string>
     <string name="file_count_one">1 file</string>
     <string name="file_count_many">%1$d files</string>

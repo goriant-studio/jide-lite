@@ -12,30 +12,30 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +44,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -56,11 +58,20 @@ import com.jidelite.model.RunResult
 import com.jidelite.runner.CodeRunner
 import com.jidelite.runner.LocalJavaRunner
 import com.jidelite.storage.FileStorageHelper
+import com.jidelite.ui.theme.DotMint
+import com.jidelite.ui.theme.DotPink
+import com.jidelite.ui.theme.DotSand
 import com.jidelite.ui.theme.EditorSurface
 import com.jidelite.ui.theme.ExplorerSurface
 import com.jidelite.ui.theme.JIdeLiteTheme
+import com.jidelite.ui.theme.PrimaryAccent
 import com.jidelite.ui.theme.RunButtonColor
+import com.jidelite.ui.theme.RunButtonText
+import com.jidelite.ui.theme.SecondaryAccent
 import com.jidelite.ui.theme.SelectedSurface
+import com.jidelite.ui.theme.SurfaceContainer
+import com.jidelite.ui.theme.TerminalInfo
+import com.jidelite.ui.theme.TerminalReady
 import com.jidelite.ui.theme.TerminalSurface
 import com.jidelite.ui.theme.TopBarSurface
 import java.io.File
@@ -81,8 +92,11 @@ class MainActivity : ComponentActivity() {
     private var editorText by mutableStateOf("")
     private var terminalText by mutableStateOf("")
     private var statusText by mutableStateOf("")
+    private var workspacePath by mutableStateOf("")
     private var isDirty by mutableStateOf(false)
     private var isRunning by mutableStateOf(false)
+    private var isExplorerCollapsed by mutableStateOf(false)
+    private var isTopBarCollapsed by mutableStateOf(true)
 
     private var suppressEditorCallbacks = false
 
@@ -90,11 +104,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         fileStorageHelper = FileStorageHelper(this)
-        codeRunner = LocalJavaRunner()
+        codeRunner = LocalJavaRunner(this, fileStorageHelper.workspaceDirectory)
         syntaxHighlighter = JavaSyntaxHighlighter(this)
         runExecutor = Executors.newSingleThreadExecutor()
         terminalText = getString(R.string.terminal_ready)
         statusText = getString(R.string.status_ready)
+        workspacePath = fileStorageHelper.workspaceDirectory.absolutePath
 
         setContent {
             JIdeLiteTheme {
@@ -104,11 +119,16 @@ class MainActivity : ComponentActivity() {
                     statusText = statusText,
                     editorText = editorText,
                     terminalText = terminalText,
+                    workspacePath = workspacePath,
                     isDirty = isDirty,
                     isRunning = isRunning,
+                    isExplorerCollapsed = isExplorerCollapsed,
+                    isTopBarCollapsed = isTopBarCollapsed,
                     onNewFile = { createNewFile() },
                     onSave = { saveCurrentFile(showToast = true) },
                     onRun = { runCurrentFile() },
+                    onToggleExplorer = { isExplorerCollapsed = !isExplorerCollapsed },
+                    onToggleTopBar = { isTopBarCollapsed = !isTopBarCollapsed },
                     onClearTerminal = { terminalText = getString(R.string.terminal_ready) },
                     onOpenFile = { file ->
                         if (saveCurrentFile(showToast = false)) {
@@ -135,6 +155,7 @@ class MainActivity : ComponentActivity() {
     private fun loadWorkspace() {
         try {
             fileStorageHelper.initializeWorkspace()
+            workspacePath = fileStorageHelper.workspaceDirectory.absolutePath
             refreshFiles()
             if (files.isNotEmpty()) {
                 openFile(files.first())
@@ -229,7 +250,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderRunResult(runResult: RunResult) {
-        val isSimulated = runResult.exitCode < 0
+        val isSimulated = runResult.exitCode < 0 &&
+                (runResult.stdout.contains("Execution mode: simulated", ignoreCase = true) ||
+                        runResult.stdout.contains("[placeholder runner]", ignoreCase = true) ||
+                        runResult.stderr.contains("placeholder", ignoreCase = true))
         val terminalBuilder = StringBuilder()
 
         when {
@@ -259,7 +283,7 @@ class MainActivity : ComponentActivity() {
 
         if (isSimulated) {
             terminalBuilder.append("\n\nExecution mode: simulated")
-        } else {
+        } else if (runResult.exitCode >= 0) {
             terminalBuilder.append("\n\nExit code: ").append(runResult.exitCode)
         }
 
@@ -270,6 +294,20 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
+    private fun compactFileLabel(fileName: String): String {
+        val baseName = fileName.removeSuffix(".java")
+        if (baseName.isEmpty()) {
+            return "J"
+        }
+
+        val digits = baseName.takeLastWhile { it.isDigit() }
+        return if (digits.isNotEmpty()) {
+            "${baseName.first().uppercaseChar()}$digits".take(3)
+        } else {
+            baseName.take(2).uppercase()
+        }
+    }
+
     @Composable
     private fun JIdeLiteApp(
         files: List<File>,
@@ -277,11 +315,16 @@ class MainActivity : ComponentActivity() {
         statusText: String,
         editorText: String,
         terminalText: String,
+        workspacePath: String,
         isDirty: Boolean,
         isRunning: Boolean,
+        isExplorerCollapsed: Boolean,
+        isTopBarCollapsed: Boolean,
         onNewFile: () -> Unit,
         onSave: () -> Unit,
         onRun: () -> Unit,
+        onToggleExplorer: () -> Unit,
+        onToggleTopBar: () -> Unit,
         onClearTerminal: () -> Unit,
         onOpenFile: (File) -> Unit,
         onEditorChanged: (String) -> Unit,
@@ -291,209 +334,410 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 14.dp, vertical = 14.dp)
-            ) {
+            Column(modifier = Modifier.fillMaxSize()) {
                 TopBar(
+                    collapsed = isTopBarCollapsed,
                     statusText = statusText,
+                    selectedFileName = selectedFileName,
+                    fileCount = files.size,
                     isRunning = isRunning,
+                    isExplorerCollapsed = isExplorerCollapsed,
                     onNewFile = onNewFile,
                     onSave = onSave,
-                    onRun = onRun
+                    onRun = onRun,
+                    onToggleExplorer = onToggleExplorer,
+                    onToggleCollapse = onToggleTopBar
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
+                Row(modifier = Modifier.fillMaxSize()) {
                     ExplorerPane(
-                        modifier = Modifier.weight(0.2f),
+                        modifier = Modifier
+                            .width(if (isExplorerCollapsed) 68.dp else 228.dp)
+                            .fillMaxHeight(),
+                        collapsed = isExplorerCollapsed,
                         files = files,
                         selectedFileName = selectedFileName,
+                        onToggleCollapse = onToggleExplorer,
                         onOpenFile = onOpenFile
                     )
 
-                    EditorPane(
-                        modifier = Modifier.weight(0.8f),
-                        fileName = selectedFileName ?: getString(R.string.editor_empty_title),
-                        isDirty = isDirty,
-                        editorText = editorText,
-                        onEditorChanged = {
-                            if (!suppressEditorCallbacks) {
-                                onEditorChanged(it)
-                            }
-                        },
-                        syntaxHighlighter = syntaxHighlighter
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(1.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant)
                     )
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        EditorPane(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            fileName = selectedFileName ?: getString(R.string.editor_empty_title),
+                            isDirty = isDirty,
+                            editorText = editorText,
+                            onEditorChanged = {
+                                if (!suppressEditorCallbacks) {
+                                    onEditorChanged(it)
+                                }
+                            },
+                            syntaxHighlighter = syntaxHighlighter
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        TerminalPane(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(if (isTopBarCollapsed) 188.dp else 176.dp),
+                            terminalText = terminalText,
+                            workspacePath = workspacePath,
+                            onClearTerminal = onClearTerminal
+                        )
+                    }
                 }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                TerminalPane(
-                    terminalText = terminalText,
-                    onClearTerminal = onClearTerminal
-                )
             }
         }
     }
 
     @Composable
     private fun TopBar(
+        collapsed: Boolean,
         statusText: String,
+        selectedFileName: String?,
+        fileCount: Int,
         isRunning: Boolean,
+        isExplorerCollapsed: Boolean,
         onNewFile: () -> Unit,
         onSave: () -> Unit,
-        onRun: () -> Unit
+        onRun: () -> Unit,
+        onToggleExplorer: () -> Unit,
+        onToggleCollapse: () -> Unit
     ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = TopBarSurface,
-            shape = RoundedCornerShape(24.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(TopBarSurface)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .height(if (collapsed) 46.dp else 52.dp)
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = getString(R.string.app_name),
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold)
-                    )
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(PrimaryAccent)
+                )
 
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Text(
+                    text = getString(R.string.app_name),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = if (collapsed) 16.sp else 17.sp,
+                    letterSpacing = 0.2.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Text(
+                    text = getString(R.string.app_version),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp
+                )
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                FilledTonalButton(
-                    onClick = onNewFile,
-                    enabled = !isRunning,
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(text = getString(R.string.action_new_file))
+                    ChromeActionButton(
+                        label = if (collapsed) "TOP+" else "TOP-",
+                        enabled = true,
+                        highlighted = false,
+                        compact = true,
+                        onClick = onToggleCollapse
+                    )
+
+                    ChromeActionButton(
+                        label = if (isExplorerCollapsed) "SIDE+" else "SIDE-",
+                        enabled = true,
+                        highlighted = false,
+                        compact = true,
+                        onClick = onToggleExplorer
+                    )
+
+                    ChromeActionButton(
+                        label = "NEW",
+                        enabled = !isRunning,
+                        highlighted = false,
+                        compact = true,
+                        onClick = onNewFile
+                    )
+
+                    ChromeActionButton(
+                        label = "SAVE",
+                        enabled = !isRunning,
+                        highlighted = false,
+                        compact = true,
+                        onClick = onSave
+                    )
+
+                    ChromeActionButton(
+                        label = "RUN",
+                        enabled = !isRunning,
+                        highlighted = true,
+                        compact = true,
+                        onClick = onRun
+                    )
                 }
+            }
 
-                Spacer(modifier = Modifier.width(8.dp))
+            if (!collapsed) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                FilledTonalButton(
-                    onClick = onSave,
-                    enabled = !isRunning,
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(text = getString(R.string.action_save))
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Button(
-                    onClick = onRun,
-                    enabled = !isRunning,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = RunButtonColor,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    Text(
+                        text = statusText,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
-                ) {
-                    Text(text = getString(R.string.action_run))
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Text(
+                        text = "${selectedFileName ?: "No file"}  |  $fileCount files",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
     }
 
     @Composable
+    private fun ChromeActionButton(
+        label: String,
+        enabled: Boolean,
+        highlighted: Boolean,
+        compact: Boolean,
+        onClick: () -> Unit
+    ) {
+        val shape = RoundedCornerShape(8.dp)
+        val containerColor = if (highlighted) RunButtonColor else SurfaceContainer
+        val textColor = if (highlighted) RunButtonText else MaterialTheme.colorScheme.onSurfaceVariant
+
+        Box(
+            modifier = Modifier
+                .alpha(if (enabled) 1f else 0.55f)
+                .clip(shape)
+                .background(containerColor)
+                .then(
+                    if (highlighted) {
+                        Modifier
+                    } else {
+                        Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+                    }
+                )
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(
+                    horizontal = if (compact) 12.dp else 24.dp,
+                    vertical = if (compact) 8.dp else 12.dp
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (highlighted) "\u25B6 $label" else label,
+                color = textColor,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = if (compact) 11.sp else 14.sp,
+                letterSpacing = if (compact) 0.3.sp else 0.7.sp
+            )
+        }
+    }
+
+    @Composable
     private fun ExplorerPane(
         modifier: Modifier,
+        collapsed: Boolean,
         files: List<File>,
         selectedFileName: String?,
+        onToggleCollapse: () -> Unit,
         onOpenFile: (File) -> Unit
     ) {
-        Surface(
-            modifier = modifier.fillMaxSize(),
-            color = ExplorerSurface,
-            shape = RoundedCornerShape(24.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        Box(
+            modifier = modifier.background(ExplorerSurface)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 18.dp, vertical = 18.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+            if (collapsed) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 8.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = getString(R.string.explorer_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        modifier = Modifier.weight(1f)
+                    ChromeActionButton(
+                        label = ">>",
+                        enabled = true,
+                        highlighted = false,
+                        compact = true,
+                        onClick = onToggleCollapse
                     )
 
-                    val fileCountText = when (files.size) {
-                        0 -> getString(R.string.file_count_zero)
-                        1 -> getString(R.string.file_count_one)
-                        else -> getString(R.string.file_count_many, files.size)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "EX",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                        letterSpacing = 1.2.sp
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 10.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
+                    if (files.isEmpty()) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            items(files, key = { it.name }) { file ->
+                                CollapsedExplorerFilePill(
+                                    label = compactFileLabel(file.name),
+                                    selected = file.name == selectedFileName,
+                                    onClick = { onOpenFile(file) }
+                                )
+                            }
+                        }
                     }
-                    Text(
-                        text = fileCountText,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
-
-                HorizontalDivider(
-                    modifier = Modifier.padding(top = 16.dp, bottom = 12.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant
-                )
-
-                if (files.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+            } else {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = getString(R.string.explorer_empty),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = getString(R.string.explorer_header),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 1.4.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        ChromeActionButton(
+                            label = "<<",
+                            enabled = true,
+                            highlighted = false,
+                            compact = true,
+                            onClick = onToggleCollapse
                         )
                     }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(files, key = { it.name }) { file ->
-                            ExplorerFileRow(
-                                file = file,
-                                selected = file.name == selectedFileName,
-                                onClick = { onOpenFile(file) }
+
+                    Text(
+                        text = "\u25BE ${getString(R.string.workspace_label)}",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    if (files.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = getString(R.string.explorer_empty),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp
                             )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(1.dp)
+                        ) {
+                            items(files, key = { it.name }) { file ->
+                                ExplorerFileRow(
+                                    file = file,
+                                    selected = file.name == selectedFileName,
+                                    onClick = { onOpenFile(file) }
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun CollapsedExplorerFilePill(
+        label: String,
+        selected: Boolean,
+        onClick: () -> Unit
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (selected) SelectedSurface else Color.Transparent)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                color = if (selected) PrimaryAccent else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp
+            )
         }
     }
 
@@ -503,34 +747,32 @@ class MainActivity : ComponentActivity() {
         selected: Boolean,
         onClick: () -> Unit
     ) {
-        Surface(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onClick),
-            color = if (selected) SelectedSurface else Color.Transparent,
-            shape = RoundedCornerShape(18.dp),
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
-                else Color.Transparent
-            )
+                .background(if (selected) SelectedSurface else Color.Transparent)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                Text(
-                    text = file.name,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = if (selected) getString(R.string.file_meta_active) else getString(R.string.file_meta),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            Box(
+                modifier = Modifier
+                    .width(8.dp)
+                    .height(18.dp)
+                    .background(if (selected) PrimaryAccent else SecondaryAccent)
+            )
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Text(
+                text = file.name,
+                color = if (selected) PrimaryAccent else MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 
@@ -543,156 +785,231 @@ class MainActivity : ComponentActivity() {
         onEditorChanged: (String) -> Unit,
         syntaxHighlighter: JavaSyntaxHighlighter
     ) {
-        Surface(
-            modifier = modifier.fillMaxSize(),
-            color = EditorSurface,
-            shape = RoundedCornerShape(24.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        Column(
+            modifier = modifier.background(EditorSurface)
         ) {
-            Column(
+            Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 20.dp, vertical = 18.dp)
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .background(SurfaceContainer)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxHeight(),
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    Text(
-                        text = fileName,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = if (isDirty) getString(R.string.editor_meta_unsaved) else getString(R.string.editor_meta_saved),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                    Column(
+                        modifier = Modifier
+                            .widthIn(min = 142.dp)
+                            .fillMaxHeight()
+                            .background(EditorSurface)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp)
+                                .background(PrimaryAccent)
+                        )
 
-                HorizontalDivider(
-                    modifier = Modifier.padding(top = 14.dp, bottom = 10.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant
-                )
-
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { context ->
-                        val horizontalPadding = with(resources.displayMetrics) { (20f * density).toInt() }
-                        val verticalPadding = with(resources.displayMetrics) { (14f * density).toInt() }
-
-                        EditText(context).apply {
-                            layoutParams = ViewGroup.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 24.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(SecondaryAccent)
                             )
-                            background = null
-                            setTextColor(context.getColor(R.color.text_primary))
-                            setHintTextColor(context.getColor(R.color.text_hint))
-                            hint = context.getString(R.string.editor_hint)
-                            gravity = Gravity.TOP or Gravity.START
-                            typeface = Typeface.MONOSPACE
-                            textSize = 15f
-                            includeFontPadding = false
-                            setHorizontallyScrolling(true)
-                            overScrollMode = EditText.OVER_SCROLL_IF_CONTENT_SCROLLS
-                            inputType = InputType.TYPE_CLASS_TEXT or
-                                    InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                                    InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-                            imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
-                            setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
-                            setLineSpacing(with(resources.displayMetrics) { 4f * density }, 1f)
-                            addTextChangedListener(object : TextWatcher {
-                                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
-                                }
 
-                                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                                }
+                            Spacer(modifier = Modifier.width(14.dp))
 
-                                override fun afterTextChanged(s: Editable?) {
-                                    if (suppressEditorCallbacks) {
-                                        return
-                                    }
-
-                                    onEditorChanged(s?.toString().orEmpty())
-                                    syntaxHighlighter.schedule(this@apply)
-                                }
-                            })
-                        }
-                    },
-                    update = { editText ->
-                        if (editText.text.toString() != editorText) {
-                            suppressEditorCallbacks = true
-                            editText.setText(editorText)
-                            editText.setSelection(editorText.length)
-                            syntaxHighlighter.highlightNow(editText)
-                            suppressEditorCallbacks = false
+                            Text(
+                                text = if (isDirty) "$fileName *" else fileName,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
-                )
+                }
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    val horizontalPadding = with(resources.displayMetrics) { (18f * density).toInt() }
+                    val verticalPadding = with(resources.displayMetrics) { (16f * density).toInt() }
+
+                    EditText(context).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        background = null
+                        setTextColor(context.getColor(R.color.text_primary))
+                        setHintTextColor(context.getColor(R.color.text_hint))
+                        hint = context.getString(R.string.editor_hint)
+                        gravity = Gravity.TOP or Gravity.START
+                        typeface = Typeface.MONOSPACE
+                        textSize = 15f
+                        includeFontPadding = false
+                        setHorizontallyScrolling(true)
+                        overScrollMode = EditText.OVER_SCROLL_IF_CONTENT_SCROLLS
+                        inputType = InputType.TYPE_CLASS_TEXT or
+                                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                        imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                        setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+                        setLineSpacing(with(resources.displayMetrics) { 5f * density }, 1f)
+                        addTextChangedListener(object : TextWatcher {
+                            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                            }
+
+                            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                            }
+
+                            override fun afterTextChanged(s: Editable?) {
+                                if (suppressEditorCallbacks) {
+                                    return
+                                }
+
+                                onEditorChanged(s?.toString().orEmpty())
+                                syntaxHighlighter.schedule(this@apply)
+                            }
+                        })
+                    }
+                },
+                update = { editText ->
+                    if (editText.text.toString() != editorText) {
+                        suppressEditorCallbacks = true
+                        editText.setText(editorText)
+                        editText.setSelection(editorText.length)
+                        syntaxHighlighter.highlightNow(editText)
+                        suppressEditorCallbacks = false
+                    }
+                }
+            )
         }
     }
 
     @Composable
     private fun TerminalPane(
+        modifier: Modifier,
         terminalText: String,
+        workspacePath: String,
         onClearTerminal: () -> Unit
     ) {
         val scrollState = rememberScrollState()
+        val readyText = getString(R.string.terminal_ready)
 
         LaunchedEffect(terminalText) {
             scrollState.scrollTo(scrollState.maxValue)
         }
 
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(360.dp),
-            color = TerminalSurface,
-            shape = RoundedCornerShape(24.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        val terminalColor = when {
+            terminalText.startsWith(readyText) -> TerminalReady
+            terminalText.contains("failed", ignoreCase = true) -> DotPink
+            terminalText.contains("simulated", ignoreCase = true) -> SecondaryAccent
+            else -> MaterialTheme.colorScheme.onSurface
+        }
+
+        Column(
+            modifier = modifier.background(TerminalSurface)
         ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .background(DotPink)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .background(DotSand)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .background(DotMint)
+                    )
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Text(
+                        text = getString(R.string.terminal_title).uppercase(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                        letterSpacing = 1.6.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                Text(
+                    text = getString(R.string.action_clear).uppercase(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.2.sp,
+                    modifier = Modifier.clickable(onClick = onClearTerminal)
+                )
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 18.dp, vertical = 16.dp)
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = getString(R.string.terminal_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    TextButton(onClick = onClearTerminal) {
-                        Text(text = getString(R.string.action_clear))
-                    }
-                }
-
-                HorizontalDivider(
-                    modifier = Modifier.padding(top = 12.dp, bottom = 10.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant
+                Text(
+                    text = getString(R.string.terminal_intro),
+                    color = TerminalInfo,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
                 )
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Transparent)
-                        .verticalScroll(scrollState)
-                ) {
-                    Text(
-                        text = terminalText,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp
-                        )
-                    )
-                }
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "${getString(R.string.terminal_workspace_prefix)} $workspacePath",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = terminalText,
+                    color = terminalColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
             }
         }
     }
