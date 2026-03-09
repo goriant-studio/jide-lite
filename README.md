@@ -1,95 +1,125 @@
 # J-IDE Lite
 
-J-IDE Lite is a small Android Java editor for quick on-device experiments. It provides a file explorer, a monospace code editor with lightweight syntax highlighting, and a terminal-style output pane for compiling and running Java programs locally.
-
-The app does not depend on Termux or a remote service. Java source is compiled inside the app, converted to DEX, and executed in-process on Android.
+J-IDE Lite is an Android Java editor for quick on-device experiments. It includes a Compose UI (explorer + editor + terminal), built-in formatting/highlighting tools, and a local compile/run pipeline that does not depend on Termux or remote services.
 
 ## Features
 
-- Compose-based Android UI with editor, explorer, and terminal panes
-- Local app-private workspace for `.java` files
-- One-tap create, save, clear, and run actions
-- Lightweight Java syntax highlighting for keywords, strings, comments, annotations, and numbers
-- Multi-file workspace execution by compiling all Java files in the workspace together
-- Default starter file generation (`Main.java`, `Main2.java`, `Main3.java`, ...)
+- Compose-based multi-pane UI with file explorer, editor, and terminal output
+- Local app-private workspace with support for `.java` and `pom.xml`
+- Quick file creation (`Main.java`, `Main2.java`, `Main3.java`, ...)
+- One-tap actions for save, format, run, clear terminal, and dependency resolve
+- Java syntax highlighting and editor shortcuts (indent, smart newline, copy/cut/paste/select all)
+- Embedded compile/run flow: Janino -> D8 -> in-memory DEX execution
+- Maven dependency resolution with local artifact caching
 
 ## Requirements
 
 - JDK 17
-- Android SDK with platform 34
-- Android build-tools that include `d8.jar`
-- Android device or emulator running Android 8.0 (API 26) or newer
+- Android SDK Platform 34
+- Android Build-Tools containing `d8.jar` (prefers `34.0.0`, then falls back to latest installed)
+- Android device/emulator running Android 8.0+ (API 26+)
+- Internet access on device for Maven dependency downloads
 
-Builds will fail early if `d8.jar` cannot be found in the installed Android SDK build-tools directory.
+Builds fail early if no `d8.jar` can be found in installed Android Build-Tools.
 
 ## Build
 
 ```bash
+# macOS / Linux
 ./gradlew assembleDebug
+
+# Windows
+.\gradlew.bat assembleDebug
 ```
 
-To install on a connected device or emulator:
+Install on connected device/emulator:
 
 ```bash
 ./gradlew installDebug
+# Windows: .\gradlew.bat installDebug
 ```
 
 ## Test
 
 ```bash
 ./gradlew test
+# Windows: .\gradlew.bat test
 ```
 
-The current test suite covers the storage helper, run result model, disabled Termux stub, and most non-Android helper logic in the local runner.
+Unit tests currently cover formatter/editor helpers, storage behavior, local runner behavior, Maven parser/dependency resolution logic, and output formatting. An instrumentation integration test is included for the main activity.
 
-## How It Works
+## Quick Start In App
 
-1. Source files are stored in the app's private `workspace` directory.
-2. When you run a file, the app mirrors the full workspace into a cache-backed runner directory.
-3. Janino compiles the Java sources to `.class` files.
-4. Android's `d8` tool converts those classes into a `classes.dex`.
-5. The app loads the DEX in memory and invokes `main(String[] args)`.
-6. `stdout` and `stderr` are captured and rendered in the terminal pane.
-
-This keeps the execution path fully local and avoids shelling out to `javac` or `java` on the device.
+1. Launch the app. Workspace is created in app-private storage.
+2. On first launch, a sample Maven workspace is seeded (`pom.xml` + `src/main/java/demo/Main.java`).
+3. Tap `DEPS` to resolve and download dependencies declared in `pom.xml`.
+4. Open a `.java` file with `public static void main(String[] args)` and tap `RUN`.
+5. Use `NEW`, `SAVE`, `BEAUTIFY`, and terminal `CLEAR` as needed.
 
 ## Workspace Rules
 
-- Files must match `^[A-Za-z][A-Za-z0-9_]*\\.java$`
-- The workspace is flat: files are stored directly in one directory
-- `Main.java` is created automatically on first launch if the workspace is empty
-- Switching files attempts to save the currently open file first
+- Allowed workspace files are `.java` and `pom.xml`.
+- If `pom.xml` exists, sources are compiled from `src/main/java`.
+- If `pom.xml` does not exist, sources are compiled from workspace root.
+- Running a selected `.java` file requires that file to define `main(String[] args)`.
+- Running from a non-Java selection (for example `pom.xml`) scans for runnable classes:
+  - If exactly one runnable class exists, it runs automatically.
+  - If multiple runnable classes exist, open the target `.java` file first and run from there.
+
+## How It Works
+
+1. Collect source files from active source roots.
+2. Resolve project dependencies from `pom.xml` (if present).
+3. Compile Java sources to `.class` using Janino.
+4. Convert compiled classes (plus runtime dependency jars) to `.dex` with D8.
+5. Load DEX in memory and invoke `main(String[] args)`.
+6. Capture `stdout` and `stderr` and render in terminal pane.
+
+## Maven Support Scope
+
+- Supports: `dependencies`, `repositories`, placeholder properties, and parent fallback for `groupId`/`version`
+- Included scopes: default, `compile`, `runtime`
+- Ignored scopes: `test`, `provided`, `system`, `import`
+- Optional dependencies are skipped
+- Runtime dependency packaging is currently `jar` only
+- Downloaded artifacts are cached in app files directory under `m2/repository`
 
 ## Limitations
 
-- User code is compiled with Java 8 source/target settings inside Janino
-- Execution expects a `public static void main(String[] args)` entry point
-- Console input is not supported
-- Projects are limited to simple flat-file Java workspaces, not full Gradle/Android projects
-- Termux integration is intentionally disabled; the embedded local runner is the supported path
+- User code is compiled with Java 8 source/target compatibility inside Janino.
+- Console stdin input is not supported.
+- Maven support is lightweight and not a full Maven lifecycle engine.
+- Code executes inside the app process; avoid running untrusted code.
+- Termux integration is intentionally disabled; embedded local runner is the supported path.
 
 ## Project Layout
 
 ```text
 .
-├── app/
-│   ├── src/main/java/com/jidelite/
-│   │   ├── MainActivity.kt
-│   │   ├── editor/
-│   │   ├── runner/
-│   │   ├── storage/
-│   │   └── model/
-│   ├── src/main/res/
-│   └── src/test/java/com/jidelite/
-├── build.gradle
-├── settings.gradle
-└── gradlew
+|-- app/
+|   |-- src/main/java/com/jidelite/
+|   |   |-- MainActivity.kt
+|   |   |-- data/
+|   |   |-- editor/
+|   |   |-- model/
+|   |   |-- runner/
+|   |   |-- storage/
+|   |   `-- ui/
+|   |-- src/main/res/
+|   |-- src/test/
+|   `-- src/androidTest/
+|-- build.gradle
+|-- settings.gradle
+|-- gradle.properties
+`-- README.md
 ```
 
 ## Key Components
 
-- `MainActivity`: UI, file selection, save/run actions, and terminal rendering
-- `FileStorageHelper`: workspace initialization, safe file naming, and file I/O
+- `MainActivity`: Compose entry point
+- `MainViewModel`: workspace/editor actions, run flow, and status updates
+- `FileStorageHelper`: workspace initialization, file validation, and file I/O
 - `LocalJavaRunner`: compile, dex, and execute pipeline
-- `JavaSyntaxHighlighter`: delayed syntax highlighting for the editor
-- `RunResult`: normalized execution result object shared by runner implementations
+- `MavenProjectDependencyResolver`: resolves transitive dependencies from `pom.xml`
+- `JavaCodeFormatter` and `JavaSyntaxHighlighter`: formatting and syntax highlighting
+- `RunOutputFormatter`: normalizes terminal/status messages
