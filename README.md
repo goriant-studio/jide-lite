@@ -1,10 +1,10 @@
 # J-IDE Lite
 
-J-IDE Lite is an Android Java editor for quick on-device experiments. It includes a Compose UI (explorer + editor + terminal), built-in formatting/highlighting tools, and a local compile/run pipeline that does not depend on Termux or remote services.
+J-IDE Lite is an Android Java editor for quick on-device experiments. It includes a Compose UI (explorer + editor + terminal), built-in formatting/highlighting tools, and a local compile/run pipeline that does not depends remote services.
 
 ## Features
 
-- Compose-based multi-pane UI with file explorer, editor, and terminal output
+- Compose-based multi-pane UI with file explorer, java editor, and terminal output (read-only)
 - Local app-private workspace with support for `.java` and `pom.xml`
 - Quick file creation (`Main.java`, `Main2.java`, `Main3.java`, ...)
 - One-tap actions for save, format, run, clear terminal, and dependency resolve

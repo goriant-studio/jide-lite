@@ -14,6 +14,7 @@ import com.jidelite.runner.CodeRunner
 import com.jidelite.storage.FileStorageHelper
 import java.io.File
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.LazyThreadSafetyMode
@@ -65,8 +66,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         try {
             val createdFile = fileStorageHelper.createNewJavaFile()
-            val refreshedFiles = refreshFiles()
-            uiState = uiState.copy(files = refreshedFiles)
+            refreshFiles()
             openFile(createdFile)
             uiState = uiState.copy(statusText = "Created ${createdFile.name}")
             emitToast("Created ${createdFile.name}")
@@ -75,6 +75,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 terminalText = "New file failed.\n\n${exception.message.orEmpty()}"
             )
             emitToast("Could not create file")
+        }
+    }
+
+    fun onNewFolderRequested() {
+        if (!saveCurrentFile(showToast = false)) {
+            return
+        }
+
+        try {
+            val createdFolder = fileStorageHelper.createNewFolder()
+            refreshFiles()
+            val relativePath = fileStorageHelper.toWorkspaceEntryRelativePath(createdFolder)
+            uiState = uiState.copy(
+                selectedEntryPath = createdFolder.absolutePath,
+                statusText = "Created folder $relativePath"
+            )
+            emitToast("Created folder ${createdFolder.name}")
+        } catch (exception: IOException) {
+            uiState = uiState.copy(
+                terminalText = "New folder failed.\n\n${exception.message.orEmpty()}"
+            )
+            emitToast("Could not create folder")
+        }
+    }
+
+    fun onDeleteEntryRequested(entry: File) {
+        val entryPath = entry.absolutePath
+        val entryLabel = entry.name
+        val entryType = if (entry.isDirectory) "folder" else "file"
+
+        val openFilePath = uiState.selectedFilePath
+        val selectedEntryPath = uiState.selectedEntryPath
+        val removesOpenFile = openFilePath != null && isSameOrChildPath(openFilePath, entryPath)
+        val removesSelectedEntry = selectedEntryPath != null && isSameOrChildPath(selectedEntryPath, entryPath)
+
+        try {
+            fileStorageHelper.deleteEntry(entry)
+            val refreshedFiles = refreshFiles()
+
+            if (removesOpenFile) {
+                val nextFile = refreshedFiles.firstOrNull { it.isFile }
+                if (nextFile != null) {
+                    openFile(nextFile)
+                } else {
+                    uiState = uiState.copy(
+                        editorText = "",
+                        selectedFilePath = null,
+                        selectedEntryPath = null,
+                        isDirty = false
+                    )
+                }
+            } else if (removesSelectedEntry) {
+                uiState = uiState.copy(selectedEntryPath = null)
+            }
+
+            uiState = uiState.copy(statusText = "Deleted $entryType $entryLabel")
+            emitToast("Deleted $entryLabel")
+        } catch (exception: IOException) {
+            uiState = uiState.copy(
+                terminalText = "Delete failed.\n\n${exception.message.orEmpty()}"
+            )
+            emitToast("Could not delete $entryLabel")
         }
     }
 
@@ -191,6 +253,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onOpenFileRequested(file: File) {
+        if (file.isDirectory) {
+            val relativePath = try {
+                fileStorageHelper.toWorkspaceEntryRelativePath(file)
+            } catch (_: IOException) {
+                file.name
+            }
+            uiState = uiState.copy(
+                selectedEntryPath = file.absolutePath,
+                statusText = "Selected folder $relativePath"
+            )
+            emitToast("Folder: $relativePath")
+            return
+        }
         if (!saveCurrentFile(showToast = false)) {
             return
         }
@@ -221,8 +296,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 workspacePath = fileStorageHelper.workspaceDirectory.absolutePath,
                 statusText = app.getString(R.string.status_ready)
             )
-            if (refreshedFiles.isNotEmpty()) {
-                openFile(refreshedFiles.first())
+            val firstFile = refreshedFiles.firstOrNull { it.isFile }
+            if (firstFile != null) {
+                openFile(firstFile)
             }
         } catch (throwable: Throwable) {
             uiState = uiState.copy(
@@ -238,10 +314,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refreshFiles(): List<File> {
-        val listedFiles = fileStorageHelper.listWorkspaceFiles()
+        val listedFiles = fileStorageHelper.listWorkspaceEntries()
+        val currentSelection = uiState.selectedEntryPath
+        val hasCurrentSelection = currentSelection != null &&
+                listedFiles.any { it.absolutePath == currentSelection }
         uiState = uiState.copy(
             files = listedFiles,
-            isMavenProject = listedFiles.any { it.name == "pom.xml" }
+            isMavenProject = listedFiles.any { it.name == "pom.xml" },
+            selectedEntryPath = if (hasCurrentSelection) currentSelection else null
         )
         return listedFiles
     }
@@ -252,6 +332,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uiState = uiState.copy(
                 editorText = fileStorageHelper.readFile(file),
                 selectedFilePath = file.absolutePath,
+                selectedEntryPath = file.absolutePath,
                 isDirty = false,
                 statusText = "Editing $relativePath"
             )
@@ -345,5 +426,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             throwable::class.java.name
         }
         return "${throwable::class.java.simpleName}: $summary"
+    }
+
+    private fun isSameOrChildPath(candidatePath: String, rootPath: String): Boolean {
+        return try {
+            val candidate = File(candidatePath).canonicalPath
+            val root = File(rootPath).canonicalPath
+            candidate == root || candidate.startsWith(root + File.separator)
+        } catch (_: IOException) {
+            val normalizedCandidate = candidatePath.lowercase(Locale.ROOT)
+            val normalizedRoot = rootPath.lowercase(Locale.ROOT)
+            normalizedCandidate == normalizedRoot || normalizedCandidate.startsWith(normalizedRoot + File.separator)
+        }
     }
 }

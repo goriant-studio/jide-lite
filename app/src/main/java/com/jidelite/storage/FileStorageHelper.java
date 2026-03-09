@@ -84,6 +84,35 @@ public class FileStorageHelper {
         return files;
     }
 
+    public List<File> listWorkspaceEntries() throws IOException {
+        ensureWorkspaceDirectory();
+
+        List<File> entries = new ArrayList<>();
+        collectWorkspaceEntries(workspaceDirectory, entries);
+        entries.sort(new Comparator<File>() {
+            @Override
+            public int compare(File left, File right) {
+                try {
+                    String leftPath = toWorkspaceRelativePathForEntry(left);
+                    String rightPath = toWorkspaceRelativePathForEntry(right);
+                    if (POM_FILE_NAME.equals(leftPath)) {
+                        return -1;
+                    }
+                    if (POM_FILE_NAME.equals(rightPath)) {
+                        return 1;
+                    }
+                    if (left.isDirectory() != right.isDirectory()) {
+                        return left.isDirectory() ? -1 : 1;
+                    }
+                    return leftPath.compareToIgnoreCase(rightPath);
+                } catch (IOException exception) {
+                    return left.getAbsolutePath().compareToIgnoreCase(right.getAbsolutePath());
+                }
+            }
+        });
+        return entries;
+    }
+
     public List<File> listJavaFiles() throws IOException {
         ensureWorkspaceDirectory();
 
@@ -128,6 +157,22 @@ public class FileStorageHelper {
         return candidate;
     }
 
+    public File createNewFolder() throws IOException {
+        File sourceDirectory = getPrimarySourceDirectory();
+        ensureDirectory(sourceDirectory);
+
+        int index = 1;
+        File candidate;
+        do {
+            String folderName = index == 1 ? "folder" : "folder" + index;
+            candidate = new File(sourceDirectory, folderName);
+            index++;
+        } while (candidate.exists());
+
+        ensureDirectory(candidate);
+        return candidate;
+    }
+
     public String readFile(String filePath) throws IOException {
         return readFile(resolveFile(filePath));
     }
@@ -169,9 +214,26 @@ public class FileStorageHelper {
 
     public String toWorkspaceRelativePath(File file) throws IOException {
         File targetFile = validateWorkspaceFile(file);
+        return toWorkspaceRelativePathForEntry(targetFile);
+    }
+
+    public String toWorkspaceEntryRelativePath(File file) throws IOException {
+        return toWorkspaceRelativePathForEntry(file);
+    }
+
+    public void deleteEntry(File file) throws IOException {
+        File target = validateWorkspaceEntry(file);
+        if (!target.exists()) {
+            throw new IOException("Entry does not exist: " + target.getName());
+        }
+
         String workspacePath = workspaceDirectory.getCanonicalPath();
-        String targetPath = targetFile.getCanonicalPath();
-        return targetPath.substring(workspacePath.length() + 1).replace(File.separatorChar, '/');
+        String targetPath = target.getCanonicalPath();
+        if (workspacePath.equals(targetPath)) {
+            throw new IOException("Cannot delete workspace root.");
+        }
+
+        deleteRecursively(target);
     }
 
     private void collectWorkspaceFiles(File directory, List<File> files) {
@@ -185,6 +247,22 @@ public class FileStorageHelper {
                 collectWorkspaceFiles(child, files);
             } else if (isSupportedWorkspaceFile(child)) {
                 files.add(child);
+            }
+        }
+    }
+
+    private void collectWorkspaceEntries(File directory, List<File> entries) {
+        File[] children = directory.listFiles();
+        if (children == null) {
+            return;
+        }
+
+        for (File child : children) {
+            if (child.isDirectory()) {
+                entries.add(child);
+                collectWorkspaceEntries(child, entries);
+            } else if (isSupportedWorkspaceFile(child)) {
+                entries.add(child);
             }
         }
     }
@@ -244,6 +322,37 @@ public class FileStorageHelper {
     private File validateWorkspaceFile(File targetFile) throws IOException {
         ensureWorkspaceDirectory();
 
+        String relativePath = toWorkspaceRelativePathForEntry(targetFile);
+        String[] segments = relativePath.split("/");
+        String fileName = segments[segments.length - 1];
+        if (!fileName.endsWith(".java") && !POM_FILE_NAME.equals(fileName)) {
+            throw new IOException("Invalid file name: " + relativePath);
+        }
+        return targetFile;
+    }
+
+    private File validateWorkspaceEntry(File targetFile) throws IOException {
+        ensureWorkspaceDirectory();
+        toWorkspaceRelativePathForEntry(targetFile);
+        return targetFile;
+    }
+
+    private void deleteRecursively(File target) throws IOException {
+        if (target.isDirectory()) {
+            File[] children = target.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+
+        if (!target.delete() && target.exists()) {
+            throw new IOException("Could not delete: " + target.getAbsolutePath());
+        }
+    }
+
+    private String toWorkspaceRelativePathForEntry(File targetFile) throws IOException {
         String workspacePath = workspaceDirectory.getCanonicalPath();
         String targetPath = targetFile.getCanonicalPath();
         if (!targetPath.startsWith(workspacePath + File.separator)) {
@@ -262,12 +371,7 @@ public class FileStorageHelper {
                 throw new IOException("Invalid file name: " + relativePath);
             }
         }
-
-        String fileName = segments[segments.length - 1];
-        if (!fileName.endsWith(".java") && !POM_FILE_NAME.equals(fileName)) {
-            throw new IOException("Invalid file name: " + relativePath);
-        }
-        return targetFile;
+        return relativePath;
     }
 
     private String buildTemplate(String className, String message) {

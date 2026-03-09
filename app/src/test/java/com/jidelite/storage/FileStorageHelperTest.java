@@ -119,6 +119,19 @@ public class FileStorageHelperTest {
     }
 
     @Test
+    void createNewFolderUsesNextAvailableNameInSourceRoot() throws Exception {
+        fileStorageHelper.saveFile("pom.xml", "<project/>");
+
+        File firstFolder = fileStorageHelper.createNewFolder();
+        File secondFolder = fileStorageHelper.createNewFolder();
+
+        assertThat(fileStorageHelper.toWorkspaceEntryRelativePath(firstFolder)).isEqualTo("src/main/java/folder");
+        assertThat(fileStorageHelper.toWorkspaceEntryRelativePath(secondFolder)).isEqualTo("src/main/java/folder2");
+        assertThat(firstFolder.isDirectory()).isTrue();
+        assertThat(secondFolder.isDirectory()).isTrue();
+    }
+
+    @Test
     void saveFileAndReadFileRoundTripContent() throws Exception {
         fileStorageHelper.saveFile("src/main/java/demo/Helper.java", "public class Helper {}\n");
 
@@ -173,5 +186,45 @@ public class FileStorageHelperTest {
 
         assertThat(relativePaths)
                 .containsExactly("pom.xml", "src/main/java/demo/App.java", "src/main/java/demo/Helper.java");
+    }
+
+    @Test
+    void listWorkspaceEntriesIncludesFoldersAndSupportedFiles() throws Exception {
+        fileStorageHelper.saveFile("pom.xml", "<project/>");
+        fileStorageHelper.saveFile("src/main/java/demo/App.java", "class App {}\n");
+
+        List<File> entries = fileStorageHelper.listWorkspaceEntries();
+
+        assertThat(entries).extracting(fileStorageHelper::toWorkspaceEntryRelativePath).containsExactly(
+                "pom.xml",
+                "src",
+                "src/main",
+                "src/main/java",
+                "src/main/java/demo",
+                "src/main/java/demo/App.java"
+        );
+    }
+
+    @Test
+    void deleteEntryRemovesFileFromWorkspace() throws Exception {
+        fileStorageHelper.saveFile("src/main/java/demo/App.java", "class App {}\n");
+        File target = new File(fileStorageHelper.getWorkspaceDirectory(), "src/main/java/demo/App.java");
+
+        fileStorageHelper.deleteEntry(target);
+
+        assertThat(fileStorageHelper.listWorkspaceFiles()).isEmpty();
+    }
+
+    @Test
+    void deleteEntryRemovesDirectoryRecursively() throws Exception {
+        fileStorageHelper.saveFile("src/main/java/demo/App.java", "class App {}\n");
+        fileStorageHelper.saveFile("src/main/java/demo/Helper.java", "class Helper {}\n");
+        File folder = new File(fileStorageHelper.getWorkspaceDirectory(), "src/main/java/demo");
+
+        fileStorageHelper.deleteEntry(folder);
+
+        assertThat(fileStorageHelper.listWorkspaceEntries())
+                .extracting(fileStorageHelper::toWorkspaceEntryRelativePath)
+                .containsExactly("src", "src/main", "src/main/java");
     }
 }

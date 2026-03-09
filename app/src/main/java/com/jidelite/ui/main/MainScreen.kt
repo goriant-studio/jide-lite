@@ -42,6 +42,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -119,11 +121,13 @@ fun MainRoute(
         uiState = uiState,
         syntaxHighlighter = syntaxHighlighter,
         onNewFile = viewModel::onNewFileRequested,
+        onNewFolder = viewModel::onNewFolderRequested,
         onResolveDependencies = viewModel::onResolveDependenciesRequested,
         onSave = viewModel::onSaveRequested,
         onFormat = viewModel::onFormatRequested,
         onRun = viewModel::onRunRequested,
         onOpenFile = viewModel::onOpenFileRequested,
+        onDeleteEntry = viewModel::onDeleteEntryRequested,
         onClearTerminal = viewModel::onClearTerminalRequested,
         onEditorChanged = viewModel::onEditorChanged,
         onStatusChanged = viewModel::updateStatus
@@ -136,11 +140,13 @@ private fun MainScreen(
     uiState: MainUiState,
     syntaxHighlighter: JavaSyntaxHighlighter,
     onNewFile: () -> Unit,
+    onNewFolder: () -> Unit,
     onResolveDependencies: () -> Unit,
     onSave: () -> Unit,
     onFormat: () -> Unit,
     onRun: () -> Unit,
     onOpenFile: (File) -> Unit,
+    onDeleteEntry: (File) -> Unit,
     onClearTerminal: () -> Unit,
     onEditorChanged: (String) -> Unit,
     onStatusChanged: (String, String?) -> Unit
@@ -184,11 +190,10 @@ private fun MainScreen(
                 collapsed = isTopBarCollapsed,
                 statusText = uiState.statusText,
                 selectedFileName = uiState.selectedFileName,
-                fileCount = uiState.files.size,
+                fileCount = uiState.files.count { it.isFile },
                 isBusy = uiState.isBusy,
                 canResolveDependencies = uiState.isMavenProject,
                 isExplorerCollapsed = isExplorerCollapsed,
-                onNewFile = onNewFile,
                 onResolveDependencies = onResolveDependencies,
                 onSave = onSave,
                 onFormat = onFormat,
@@ -234,9 +239,13 @@ private fun MainScreen(
                         collapsed = isExplorerCollapsed,
                         workspacePath = uiState.workspacePath,
                         files = uiState.files,
-                        selectedFilePath = uiState.selectedFilePath,
+                        selectedEntryPath = uiState.selectedEntryPath,
+                        isBusy = uiState.isBusy,
+                        onNewFile = onNewFile,
+                        onNewFolder = onNewFolder,
                         onToggleCollapse = { isExplorerCollapsed = !isExplorerCollapsed },
-                        onOpenFile = onOpenFile
+                        onOpenFile = onOpenFile,
+                        onDeleteEntry = onDeleteEntry
                     )
 
                     if (isExplorerCollapsed) {
@@ -331,7 +340,6 @@ private fun TopBar(
     isBusy: Boolean,
     canResolveDependencies: Boolean,
     isExplorerCollapsed: Boolean,
-    onNewFile: () -> Unit,
     onResolveDependencies: () -> Unit,
     onSave: () -> Unit,
     onFormat: () -> Unit,
@@ -404,15 +412,6 @@ private fun TopBar(
                     compact = true,
                     testTag = "topbar-side",
                     onClick = onToggleExplorer
-                )
-
-                ChromeActionButton(
-                    label = stringResource(R.string.action_new_short).uppercase(),
-                    enabled = !isBusy,
-                    highlighted = false,
-                    compact = true,
-                    testTag = "topbar-new",
-                    onClick = onNewFile
                 )
 
                 ChromeActionButton(
@@ -537,10 +536,32 @@ private fun ExplorerPane(
     collapsed: Boolean,
     workspacePath: String,
     files: List<File>,
-    selectedFilePath: String?,
+    selectedEntryPath: String?,
+    isBusy: Boolean,
+    onNewFile: () -> Unit,
+    onNewFolder: () -> Unit,
     onToggleCollapse: () -> Unit,
-    onOpenFile: (File) -> Unit
+    onOpenFile: (File) -> Unit,
+    onDeleteEntry: (File) -> Unit
 ) {
+    var showNewMenu by remember { mutableStateOf(false) }
+    val treeRoots = remember(workspacePath, files) { buildExplorerTree(workspacePath, files) }
+    val directoryPaths = remember(treeRoots) { collectDirectoryPaths(treeRoots) }
+    var hasInitializedExpandedState by remember(workspacePath) { mutableStateOf(false) }
+    var expandedDirectoryPaths by remember(workspacePath) { mutableStateOf(emptySet<String>()) }
+
+    LaunchedEffect(directoryPaths) {
+        expandedDirectoryPaths = expandedDirectoryPaths.intersect(directoryPaths)
+        if (!hasInitializedExpandedState) {
+            expandedDirectoryPaths = directoryPaths
+            hasInitializedExpandedState = true
+        }
+    }
+
+    val visibleNodes = remember(treeRoots, expandedDirectoryPaths) {
+        flattenExplorerTree(treeRoots, expandedDirectoryPaths)
+    }
+
     Box(
         modifier = modifier.background(ExplorerSurface)
     ) {
@@ -570,6 +591,40 @@ private fun ExplorerPane(
                     letterSpacing = 1.2.sp
                 )
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Box {
+                    ChromeActionButton(
+                        label = "+",
+                        enabled = !isBusy,
+                        highlighted = false,
+                        compact = true,
+                        testTag = "explorer-new",
+                        onClick = { showNewMenu = true }
+                    )
+                    DropdownMenu(
+                        expanded = showNewMenu,
+                        onDismissRequest = { showNewMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(text = "Folder") },
+                            onClick = {
+                                showNewMenu = false
+                                onNewFolder()
+                            },
+                            enabled = !isBusy
+                        )
+                        DropdownMenuItem(
+                            text = { Text(text = "File") },
+                            onClick = {
+                                showNewMenu = false
+                                onNewFile()
+                            },
+                            enabled = !isBusy
+                        )
+                    }
+                }
+
                 HorizontalDivider(
                     modifier = Modifier.padding(vertical = 10.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
@@ -585,8 +640,8 @@ private fun ExplorerPane(
                     ) {
                         items(files, key = { workspaceRelativePath(workspacePath, it) }) { file ->
                             CollapsedExplorerFilePill(
-                                label = compactFileLabel(file.name),
-                                selected = file.absolutePath == selectedFilePath,
+                                label = if (file.isDirectory) "DIR" else compactFileLabel(file.name),
+                                selected = file.absolutePath == selectedEntryPath,
                                 onClick = { onOpenFile(file) }
                             )
                         }
@@ -610,6 +665,40 @@ private fun ExplorerPane(
                         letterSpacing = 1.4.sp,
                         modifier = Modifier.weight(1f)
                     )
+
+                    Box {
+                        ChromeActionButton(
+                            label = "+",
+                            enabled = !isBusy,
+                            highlighted = false,
+                            compact = true,
+                            testTag = "explorer-new",
+                            onClick = { showNewMenu = true }
+                        )
+                        DropdownMenu(
+                            expanded = showNewMenu,
+                            onDismissRequest = { showNewMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(text = "Folder") },
+                                onClick = {
+                                    showNewMenu = false
+                                    onNewFolder()
+                                },
+                                enabled = !isBusy
+                            )
+                            DropdownMenuItem(
+                                text = { Text(text = "File") },
+                                onClick = {
+                                    showNewMenu = false
+                                    onNewFile()
+                                },
+                                enabled = !isBusy
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
 
                     ChromeActionButton(
                         label = "<<",
@@ -650,12 +739,23 @@ private fun ExplorerPane(
                             .padding(top = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(1.dp)
                     ) {
-                        items(files, key = { workspaceRelativePath(workspacePath, it) }) { file ->
-                            ExplorerFileRow(
-                                file = file,
-                                workspacePath = workspacePath,
-                                selected = file.absolutePath == selectedFilePath,
-                                onClick = { onOpenFile(file) }
+                        items(visibleNodes, key = { it.node.path }) { visibleNode ->
+                            ExplorerTreeRow(
+                                node = visibleNode.node,
+                                depth = visibleNode.depth,
+                                selected = visibleNode.node.file.absolutePath == selectedEntryPath,
+                                expanded = visibleNode.node.isDirectory &&
+                                        expandedDirectoryPaths.contains(visibleNode.node.path),
+                                isBusy = isBusy,
+                                onToggleExpand = { path ->
+                                    expandedDirectoryPaths = if (expandedDirectoryPaths.contains(path)) {
+                                        expandedDirectoryPaths - path
+                                    } else {
+                                        expandedDirectoryPaths + path
+                                    }
+                                },
+                                onSelect = onOpenFile,
+                                onDelete = onDeleteEntry
                             )
                         }
                     }
@@ -691,38 +791,184 @@ private fun CollapsedExplorerFilePill(
 }
 
 @Composable
-private fun ExplorerFileRow(
-    file: File,
-    workspacePath: String,
+private fun ExplorerTreeRow(
+    node: ExplorerNode,
+    depth: Int,
     selected: Boolean,
-    onClick: () -> Unit
+    expanded: Boolean,
+    isBusy: Boolean,
+    onToggleExpand: (String) -> Unit,
+    onSelect: (File) -> Unit,
+    onDelete: (File) -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (selected) SelectedSurface else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .width(8.dp)
-                .height(18.dp)
-                .background(if (selected) PrimaryAccent else SecondaryAccent)
-        )
+                .weight(1f)
+                .clickable { onSelect(node.file) }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Spacer(modifier = Modifier.width((depth * 14).dp))
 
-        Spacer(modifier = Modifier.width(14.dp))
+            Text(
+                text = when {
+                    !node.isDirectory -> " "
+                    expanded -> "\u25BE"
+                    else -> "\u25B8"
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .width(14.dp)
+                    .clickable(enabled = node.isDirectory) {
+                        onToggleExpand(node.path)
+                    }
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Box(
+                modifier = Modifier
+                    .width(8.dp)
+                    .height(16.dp)
+                    .background(
+                        when {
+                            selected -> PrimaryAccent
+                            node.isDirectory -> SecondaryAccent
+                            else -> DotMint
+                        }
+                    )
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Text(
+                text = if (node.isDirectory) "${node.name}/" else node.name,
+                color = if (selected) PrimaryAccent else MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
 
         Text(
-            text = workspaceRelativePath(workspacePath, file),
-            color = if (selected) PrimaryAccent else MaterialTheme.colorScheme.onSurface,
+            text = "DEL",
+            color = DotPink,
             fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Medium,
-            fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            fontSize = 11.sp,
+            modifier = Modifier
+                .alpha(if (isBusy) 0.45f else 1f)
+                .clickable(enabled = !isBusy) { onDelete(node.file) }
+                .padding(horizontal = 6.dp, vertical = 4.dp)
         )
+    }
+}
+
+private data class ExplorerNode(
+    val path: String,
+    val name: String,
+    val file: File,
+    val isDirectory: Boolean,
+    val children: MutableList<ExplorerNode> = mutableListOf()
+)
+
+private data class VisibleExplorerNode(
+    val node: ExplorerNode,
+    val depth: Int
+)
+
+private fun buildExplorerTree(workspacePath: String, files: List<File>): List<ExplorerNode> {
+    val sortedFiles = files.sortedWith(
+        compareBy<File>({ !it.isDirectory }, { workspaceRelativePath(workspacePath, it).lowercase() })
+    )
+    val nodeByPath = LinkedHashMap<String, ExplorerNode>()
+    for (file in sortedFiles) {
+        val relativePath = workspaceRelativePath(workspacePath, file)
+        if (relativePath.isBlank()) {
+            continue
+        }
+        nodeByPath[relativePath] = ExplorerNode(
+            path = relativePath,
+            name = relativePath.substringAfterLast('/'),
+            file = file,
+            isDirectory = file.isDirectory
+        )
+    }
+
+    val roots = mutableListOf<ExplorerNode>()
+    for ((path, node) in nodeByPath) {
+        val parentPath = path.substringBeforeLast('/', "")
+        val parentNode = nodeByPath[parentPath]
+        if (parentNode != null && parentNode.isDirectory) {
+            parentNode.children.add(node)
+        } else {
+            roots.add(node)
+        }
+    }
+
+    sortExplorerNodes(roots)
+    return roots
+}
+
+private fun sortExplorerNodes(nodes: MutableList<ExplorerNode>) {
+    nodes.sortWith(compareBy<ExplorerNode>({ !it.isDirectory }, { it.name.lowercase() }))
+    for (node in nodes) {
+        if (node.children.isNotEmpty()) {
+            sortExplorerNodes(node.children)
+        }
+    }
+}
+
+private fun collectDirectoryPaths(nodes: List<ExplorerNode>): Set<String> {
+    val directoryPaths = linkedSetOf<String>()
+
+    fun visit(node: ExplorerNode) {
+        if (node.isDirectory) {
+            directoryPaths.add(node.path)
+        }
+        for (child in node.children) {
+            visit(child)
+        }
+    }
+
+    for (node in nodes) {
+        visit(node)
+    }
+    return directoryPaths
+}
+
+private fun flattenExplorerTree(
+    roots: List<ExplorerNode>,
+    expandedDirectoryPaths: Set<String>
+): List<VisibleExplorerNode> {
+    val output = mutableListOf<VisibleExplorerNode>()
+    for (root in roots) {
+        appendVisibleNode(output, root, 0, expandedDirectoryPaths)
+    }
+    return output
+}
+
+private fun appendVisibleNode(
+    output: MutableList<VisibleExplorerNode>,
+    node: ExplorerNode,
+    depth: Int,
+    expandedDirectoryPaths: Set<String>
+) {
+    output.add(VisibleExplorerNode(node = node, depth = depth))
+    if (node.isDirectory && expandedDirectoryPaths.contains(node.path)) {
+        for (child in node.children) {
+            appendVisibleNode(output, child, depth + 1, expandedDirectoryPaths)
+        }
     }
 }
 

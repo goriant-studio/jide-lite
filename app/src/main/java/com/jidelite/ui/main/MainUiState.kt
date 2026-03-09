@@ -5,6 +5,7 @@ import java.io.File
 data class MainUiState(
     val files: List<File> = emptyList(),
     val selectedFilePath: String? = null,
+    val selectedEntryPath: String? = null,
     val editorText: String = "",
     val terminalText: String = "",
     val statusText: String = "",

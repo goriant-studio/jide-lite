@@ -30,7 +30,9 @@ class MainActivityIntegrationTest {
 
     companion object {
         private const val SAMPLE_MAIN_PATH = "src/main/java/demo/Main.java"
+        private const val SAMPLE_MAIN_FILE_NAME = "Main.java"
         private const val NEW_FILE_PATH = "src/main/java/Main2.java"
+        private const val NEW_FILE_NAME = "Main2.java"
     }
 
     @get:Rule
@@ -52,8 +54,10 @@ class MainActivityIntegrationTest {
     fun newActionCreatesAndOpensNextJavaFile() {
         launchActivity()
 
-        composeRule.onNodeWithTag("topbar-new").assertExists()
-        composeRule.onNodeWithTag("topbar-new").performClick()
+        composeRule.onNodeWithTag("explorer-new").assertExists()
+        composeRule.onNodeWithTag("explorer-new").performClick()
+        composeRule.onNodeWithText("File").assertExists()
+        composeRule.onNodeWithText("File").performClick()
 
         composeRule.waitUntil(5_000) {
             currentUiState().selectedFilePath
@@ -61,7 +65,7 @@ class MainActivityIntegrationTest {
                 ?.endsWith(NEW_FILE_PATH) == true &&
                     currentUiState().editorText.contains("Hello from Main2")
         }
-        composeRule.onNodeWithText(NEW_FILE_PATH).assertExists()
+        composeRule.onNodeWithText(NEW_FILE_NAME).assertExists()
         onView(isAssignableFrom(EditText::class.java))
             .check(matches(withText(containsString("Hello from Main2"))))
     }
@@ -117,8 +121,8 @@ class MainActivityIntegrationTest {
     }
 
     private fun openSampleJavaFile() {
-        composeRule.onNodeWithText(SAMPLE_MAIN_PATH).assertExists()
-        composeRule.onNodeWithText(SAMPLE_MAIN_PATH).performClick()
+        composeRule.onNodeWithText(SAMPLE_MAIN_FILE_NAME).assertExists()
+        composeRule.onNodeWithText(SAMPLE_MAIN_FILE_NAME).performClick()
         composeRule.waitUntil(5_000) {
             currentUiState().selectedFilePath
                 ?.replace(File.separatorChar, '/')
