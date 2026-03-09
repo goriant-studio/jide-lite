@@ -6,6 +6,7 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.Toast
@@ -306,6 +307,31 @@ class MainActivity : ComponentActivity() {
         } else {
             baseName.take(2).uppercase()
         }
+    }
+
+    private fun insertTwoSpaceIndent(editText: EditText) {
+        val editable = editText.text ?: return
+        val selectionStart = editText.selectionStart.coerceAtLeast(0)
+        val selectionEnd = editText.selectionEnd.coerceAtLeast(0)
+        val start = minOf(selectionStart, selectionEnd)
+        val end = maxOf(selectionStart, selectionEnd)
+
+        if (start == end) {
+            editable.insert(start, "  ")
+            editText.setSelection(start + 2)
+            return
+        }
+
+        val currentText = editable.toString()
+        val firstLineStart = currentText.lastIndexOf('\n', start - 1).let { index ->
+            if (index == -1) 0 else index + 1
+        }
+        val selectedBlock = currentText.substring(firstLineStart, end)
+        val indentedBlock = "  " + selectedBlock.replace("\n", "\n  ")
+        val insertedSpaces = indentedBlock.length - selectedBlock.length
+
+        editable.replace(firstLineStart, end, indentedBlock)
+        editText.setSelection(start + 2, end + insertedSpaces)
     }
 
     @Composable
@@ -869,6 +895,14 @@ class MainActivity : ComponentActivity() {
                         imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
                         setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
                         setLineSpacing(with(resources.displayMetrics) { 5f * density }, 1f)
+                        setOnKeyListener { _, keyCode, event ->
+                            if (keyCode == KeyEvent.KEYCODE_TAB && event.action == KeyEvent.ACTION_DOWN) {
+                                insertTwoSpaceIndent(this)
+                                true
+                            } else {
+                                false
+                            }
+                        }
                         addTextChangedListener(object : TextWatcher {
                             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
                             }

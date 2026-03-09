@@ -8,14 +8,14 @@ import com.android.tools.r8.D8Command;
 import com.android.tools.r8.OutputMode;
 import com.jidelite.model.RunResult;
 
-import org.eclipse.jdt.core.compiler.batch.BatchCompiler;
+import org.codehaus.commons.compiler.CompileException;
+import org.codehaus.janino.ClassLoaderIClassLoader;
+import org.codehaus.janino.Compiler;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -86,21 +86,33 @@ public class LocalJavaRunner implements CodeRunner {
             return new RunResult(false, commandTrace(safeFileName), "No Java source files found to compile.", 1);
         }
 
-        StringWriter compilerOutWriter = new StringWriter();
-        StringWriter compilerErrWriter = new StringWriter();
-        boolean compileSuccess = BatchCompiler.compile(
-                buildCompilerArguments(sourceFiles, classesDir),
-                new PrintWriter(compilerOutWriter),
-                new PrintWriter(compilerErrWriter),
-                null
-        );
-
-        String compileOutput = normalizeCompilerText(compilerOutWriter.toString(), compilerErrWriter.toString());
         String compileCommand = sourceFiles.size() > 1 ? "$ javac *.java" : commandTrace(safeFileName);
+        String compileOutput;
 
-        if (!compileSuccess) {
-            String errorText = compileOutput.isEmpty() ? "Compilation failed." : compileOutput;
-            return new RunResult(false, compileCommand, errorText, 1);
+        try {
+            compileOutput = compileSources(sourceFiles, sourcesDir, classesDir);
+        } catch (CompileException exception) {
+            String errorText = normalizeCompilerText(exception.getMessage(), "");
+            return new RunResult(false, compileCommand, errorText.isEmpty() ? "Compilation failed." : errorText, 1);
+        } catch (IOException exception) {
+            return new RunResult(
+                    false,
+                    compileCommand,
+                    "Compilation failed.\n\n" + exception.getMessage(),
+                    1
+            );
+        } catch (Throwable throwable) {
+            return new RunResult(
+                    false,
+                    compileCommand,
+                    "Compiler backend failed.\n\n" + throwable.getClass().getSimpleName()
+                            + ": " + String.valueOf(throwable.getMessage()),
+                    1
+            );
+        }
+
+        if (!compileOutput.isEmpty()) {
+            compileOutput = normalizeCompilerText(compileOutput, "");
         }
 
         List<File> classFiles;
@@ -135,28 +147,17 @@ public class LocalJavaRunner implements CodeRunner {
         return executeMainClass(compileCommand, qualifiedMainClass, dexDir);
     }
 
-    private String[] buildCompilerArguments(List<File> sourceFiles, File classesDir) {
-        List<String> arguments = new ArrayList<>();
-        arguments.add("-proc:none");
-        arguments.add("-source");
-        arguments.add("1.8");
-        arguments.add("-target");
-        arguments.add("1.8");
-        arguments.add("-encoding");
-        arguments.add("UTF-8");
-        arguments.add("-d");
-        arguments.add(classesDir.getAbsolutePath());
-
-        String classpath = System.getProperty("java.class.path");
-        if (classpath != null && !classpath.trim().isEmpty()) {
-            arguments.add("-classpath");
-            arguments.add(classpath);
-        }
-
-        for (File sourceFile : sourceFiles) {
-            arguments.add(sourceFile.getAbsolutePath());
-        }
-        return arguments.toArray(new String[0]);
+    private String compileSources(List<File> sourceFiles, File sourcesDir, File classesDir)
+            throws CompileException, IOException {
+        Compiler compiler = new Compiler();
+        compiler.setSourceVersion(8);
+        compiler.setTargetVersion(8);
+        compiler.setEncoding(StandardCharsets.UTF_8);
+        compiler.setSourcePath(new File[]{sourcesDir});
+        compiler.setDestinationDirectory(classesDir, false);
+        compiler.setIClassLoader(new ClassLoaderIClassLoader(appContext.getClassLoader()));
+        compiler.compile(sourceFiles.toArray(new File[0]));
+        return "";
     }
 
     private void dexClasses(List<File> classFiles, File dexDir) throws CompilationFailedException {
