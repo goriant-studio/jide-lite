@@ -1,15 +1,23 @@
 package com.goriant.jidelite.ui.theme
 
-enum class ThemeMode(val storageValue: String) {
-    LIGHT("light"),
-    DARK("dark");
-
+enum class ThemeMode(
+    val storageValue: String,
     val isDarkTheme: Boolean
-        get() = this == DARK
+) {
+    DARK(
+        storageValue = "dark",
+        isDarkTheme = true
+    ),
+    LIGHT(
+        storageValue = "light",
+        isDarkTheme = false
+    );
 
     companion object {
         fun fromStorage(value: String?): ThemeMode? {
-            return values().firstOrNull { it.storageValue.equals(value, ignoreCase = true) }
+            return entries.firstOrNull { mode ->
+                mode.storageValue.equals(value, ignoreCase = true)
+            }
         }
     }
 }
