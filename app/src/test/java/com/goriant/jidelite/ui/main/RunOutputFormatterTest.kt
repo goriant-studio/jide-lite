@@ -39,4 +39,19 @@ class RunOutputFormatterTest {
         assertThat(presentation.terminalText).contains("Boom")
         assertThat(presentation.terminalText).contains("Exit code: 1")
     }
+
+    @Test
+    fun formatExtractsEditorDiagnosticFromCompilerOutput() {
+        val presentation = RunOutputFormatter.format(
+            RunResult(
+                false,
+                "\$ javac Main.java",
+                "src/main/java/demo/Main.java:9: error: ';' expected",
+                1
+            )
+        )
+
+        assertThat(presentation.editorDiagnostic?.fileReference).isEqualTo("src/main/java/demo/Main.java")
+        assertThat(presentation.editorDiagnostic?.lineNumber).isEqualTo(9)
+    }
 }

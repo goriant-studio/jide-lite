@@ -4,7 +4,8 @@ import com.goriant.jidelite.model.RunResult
 
 data class RunPresentation(
     val statusText: String,
-    val terminalText: String
+    val terminalText: String,
+    val editorDiagnostic: EditorDiagnosticHint? = null
 )
 
 object RunOutputFormatter {
@@ -49,7 +50,11 @@ object RunOutputFormatter {
 
         return RunPresentation(
             statusText = statusText,
-            terminalText = terminalBuilder.toString()
+            terminalText = terminalBuilder.toString(),
+            editorDiagnostic = EditorDiagnosticParser.parse(
+                stderr = runResult.stderr,
+                stdout = runResult.stdout
+            )
         )
     }
 

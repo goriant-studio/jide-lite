@@ -9,4 +9,12 @@
     <color name="syntax_comment">#6B7285</color>
     <color name="syntax_annotation">#7DCFFF</color>
     <color name="syntax_number">#D19A66</color>
+    <color name="editor_gutter_bg">#11161D</color>
+    <color name="editor_gutter_divider">#2A3140</color>
+    <color name="editor_line_number">#5B6578</color>
+    <color name="editor_line_number_active">#A7B6CE</color>
+    <color name="editor_line_number_error">#F2838F</color>
+    <color name="editor_error_line_bg">#2C1C24</color>
+    <color name="editor_search_match">#524620</color>
+    <color name="editor_search_match_active">#8D7530</color>
 </resources>

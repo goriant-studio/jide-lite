@@ -7,6 +7,7 @@ data class MainUiState(
     val selectedFilePath: String? = null,
     val selectedEntryPath: String? = null,
     val editorText: String = "",
+    val editorDiagnostic: EditorDiagnostic? = null,
     val terminalText: String = "",
     val statusText: String = "",
     val workspacePath: String = "",

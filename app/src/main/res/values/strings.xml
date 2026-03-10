@@ -24,4 +24,11 @@
     <string name="toast_format_no_changes">No format changes</string>
     <string name="toast_no_maven_project">No pom.xml found</string>
     <string name="toast_no_file_selected">No file selected</string>
+    <string name="find_label">Find</string>
+    <string name="replace_label">Replace</string>
+    <string name="find_prev">Prev</string>
+    <string name="find_next">Next</string>
+    <string name="find_close">Close</string>
+    <string name="replace_action">Replace</string>
+    <string name="replace_all_action">All</string>
 </resources>

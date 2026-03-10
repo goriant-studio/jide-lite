@@ -14,6 +14,7 @@ import org.codehaus.commons.compiler.util.resource.PathResourceFinder;
 import org.codehaus.janino.ClassLoaderIClassLoader;
 import org.codehaus.janino.Compiler;
 import org.codehaus.janino.IClassLoader;
+import org.codehaus.janino.JavaSourceIClassLoader;
 import org.codehaus.janino.ResourceFinderIClassLoader;
 
 import java.io.ByteArrayOutputStream;
@@ -282,22 +283,38 @@ public class LocalJavaRunner implements CodeRunner {
         compiler.setSourceVersion(8);
         compiler.setTargetVersion(8);
         compiler.setEncoding(StandardCharsets.UTF_8);
-        compiler.setSourcePath(sourceRoots.toArray(new File[0]));
         compiler.setDestinationDirectory(classesDir, false);
-        compiler.setIClassLoader(buildCompilerClassLoader(compileJars));
+        // NOTE: do NOT call setSourcePath() separately. In Janino 3.1.12, setSourcePath()
+        // wraps the current iClassLoader with a JavaSourceIClassLoader. Calling
+        // setIClassLoader() afterwards replaces that wrapper entirely, discarding the
+        // source path setup. We build the full lookup chain explicitly instead.
+        compiler.setIClassLoader(buildCompilerClassLoader(compileJars, sourceRoots));
         compiler.compile(sourceFiles.toArray(new File[0]));
     }
 
-    private IClassLoader buildCompilerClassLoader(List<File> compileJars) {
+    private IClassLoader buildCompilerClassLoader(List<File> compileJars, List<File> sourceRoots) {
         ClassLoader parentClassLoader = appContext.getClassLoader();
         if (parentClassLoader == null) {
             parentClassLoader = LocalJavaRunner.class.getClassLoader();
         }
-        IClassLoader parent = new ClassLoaderIClassLoader(parentClassLoader);
-        if (compileJars == null || compileJars.isEmpty()) {
-            return parent;
-        }
-        return new ResourceFinderIClassLoader(new PathResourceFinder(compileJars.toArray(new File[0])), parent);
+
+        // Layer 1 - app ClassLoader: resolves java.lang.*, android.*, etc.
+        IClassLoader base = new ClassLoaderIClassLoader(parentClassLoader);
+
+        // Layer 2 - Maven JAR dependencies (compile classpath)
+        IClassLoader withJars = (compileJars == null || compileJars.isEmpty())
+                ? base
+                : new ResourceFinderIClassLoader(
+                new PathResourceFinder(compileJars.toArray(new File[0])), base);
+
+        // Layer 3 - workspace source files: when Janino compiles Main.java and hits an
+        // unknown type (e.g. Person), it searches source roots for Person.java and compiles
+        // it on-demand before continuing. Without this layer, all cross-file references fail.
+        return new JavaSourceIClassLoader(
+                new PathResourceFinder(sourceRoots.toArray(new File[0])),
+                StandardCharsets.UTF_8.name(),
+                withJars
+        );
     }
 
     private void dexClasses(List<File> classFiles, List<File> runtimeJars, File dexDir) throws CompilationFailedException {

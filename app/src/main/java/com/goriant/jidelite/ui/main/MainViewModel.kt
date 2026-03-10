@@ -78,7 +78,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (newText == uiState.editorText) {
             return
         }
-        uiState = uiState.copy(editorText = newText, isDirty = true)
+        uiState = uiState.copy(
+            editorText = newText,
+            isDirty = true,
+            editorDiagnostic = null
+        )
     }
 
     fun onNewFileRequested() {
@@ -146,6 +150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     uiState = uiState.copy(
                         editorText = "",
+                        editorDiagnostic = null,
                         selectedFilePath = null,
                         selectedEntryPath = null,
                         isDirty = false
@@ -276,6 +281,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         uiState = uiState.copy(
             editorText = formattedSource,
+            editorDiagnostic = null,
             isDirty = true,
             statusText = app.getString(R.string.status_formatted, fileName)
         )
@@ -298,7 +304,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isRunning = true,
             isResolvingDependencies = false,
             statusText = "Running $fileName",
-            terminalText = "Running $fileName..."
+            terminalText = "Running $fileName...",
+            editorDiagnostic = null
         )
         persistBuildState(
             status = BuildStatus.RUNNING,
@@ -343,7 +350,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isRunning = false,
             isResolvingDependencies = true,
             statusText = "Resolving Maven dependencies",
-            terminalText = "Resolving Maven dependencies..."
+            terminalText = "Resolving Maven dependencies...",
+            editorDiagnostic = null
         )
         persistBuildState(
             status = BuildStatus.RUNNING,
@@ -395,7 +403,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onClearTerminalRequested() {
-        uiState = uiState.copy(terminalText = app.getString(R.string.terminal_ready))
+        uiState = uiState.copy(
+            terminalText = app.getString(R.string.terminal_ready),
+            editorDiagnostic = null
+        )
     }
 
     fun updateStatus(statusText: String, toastMessage: String? = null) {
@@ -458,6 +469,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val relativePath = fileStorageHelper.toWorkspaceRelativePath(file)
             uiState = uiState.copy(
                 editorText = fileStorageHelper.readFile(file),
+                editorDiagnostic = null,
                 selectedFilePath = file.absolutePath,
                 selectedEntryPath = file.absolutePath,
                 isDirty = false,
@@ -497,17 +509,107 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun applyBackgroundPresentation(presentation: RunPresentation) {
-        uiState = uiState.copy(
+        val diagnostic = resolveEditorDiagnostic(presentation.editorDiagnostic)
+        var nextState = uiState.copy(
             isRunning = false,
             isResolvingDependencies = false,
             statusText = presentation.statusText,
-            terminalText = presentation.terminalText
+            terminalText = presentation.terminalText,
+            editorDiagnostic = diagnostic
         )
+        val diagnosticFilePath = diagnostic?.filePath
+
+        if (!diagnosticFilePath.isNullOrBlank() && diagnosticFilePath != uiState.selectedFilePath) {
+            val file = File(diagnosticFilePath)
+            val fileContents = readEditorFile(file)
+            if (fileContents != null) {
+                nextState = nextState.copy(
+                    editorText = fileContents,
+                    selectedFilePath = diagnosticFilePath,
+                    selectedEntryPath = diagnosticFilePath,
+                    isDirty = false
+                )
+                uiState = nextState
+                persistSelectionState()
+                persistOpenEditor(diagnosticFilePath)
+            } else {
+                uiState = nextState.copy(editorDiagnostic = null)
+            }
+        } else {
+            uiState = nextState
+        }
+
         persistBuildState(
             status = inferBuildStatus(presentation),
             output = presentation.terminalText,
             artifactPath = null
         )
+    }
+
+    private fun resolveEditorDiagnostic(hint: EditorDiagnosticHint?): EditorDiagnostic? {
+        if (hint == null || hint.lineNumber <= 0) {
+            return null
+        }
+
+        return EditorDiagnostic(
+            filePath = resolveDiagnosticFilePath(hint.fileReference),
+            lineNumber = hint.lineNumber,
+            message = hint.message
+        )
+    }
+
+    private fun resolveDiagnosticFilePath(fileReference: String?): String? {
+        if (fileReference.isNullOrBlank()) {
+            return uiState.selectedFilePath
+        }
+
+        val currentSelectedPath = uiState.selectedFilePath
+        val normalizedReference = fileReference.replace('\\', '/')
+        val referenceName = File(fileReference).name
+
+        if (!currentSelectedPath.isNullOrBlank()) {
+            val normalizedCurrent = currentSelectedPath.replace('\\', '/')
+            if (normalizedCurrent.endsWith(normalizedReference) ||
+                (referenceName.isNotBlank() && File(currentSelectedPath).name == referenceName)
+            ) {
+                return currentSelectedPath
+            }
+        }
+
+        val absoluteCandidate = File(fileReference)
+        if (absoluteCandidate.exists() && absoluteCandidate.isFile) {
+            return absoluteCandidate.absolutePath
+        }
+
+        val workspaceCandidate = File(fileStorageHelper.workspaceDirectory, fileReference)
+        if (workspaceCandidate.exists() && workspaceCandidate.isFile) {
+            return workspaceCandidate.absolutePath
+        }
+
+        val workspaceFiles = uiState.files.filter { it.isFile }
+        val suffixMatches = workspaceFiles.filter { file ->
+            file.absolutePath.replace('\\', '/').endsWith(normalizedReference)
+        }
+        if (suffixMatches.size == 1) {
+            return suffixMatches.first().absolutePath
+        }
+
+        val nameMatches = workspaceFiles.filter { file ->
+            file.name == referenceName
+        }
+        if (nameMatches.size == 1) {
+            return nameMatches.first().absolutePath
+        }
+
+        return currentSelectedPath
+    }
+
+    private fun readEditorFile(file: File): String? {
+        return try {
+            fileStorageHelper.readFile(file)
+        } catch (_: IOException) {
+            null
+        }
     }
 
     private fun emitToast(message: String) {

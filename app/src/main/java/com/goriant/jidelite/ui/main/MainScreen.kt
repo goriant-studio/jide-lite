@@ -67,6 +67,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -100,6 +102,8 @@ import com.goriant.jidelite.ui.theme.TerminalReady
 import com.goriant.jidelite.ui.theme.TerminalSurface
 import com.goriant.jidelite.ui.theme.TopBarSurface
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private const val DEFAULT_EXPLORER_WIDTH = 228f
 private const val DEFAULT_TERMINAL_HEIGHT = 188f
@@ -174,6 +178,11 @@ private fun MainScreen(
     var isTopBarCollapsed by rememberSaveable { mutableStateOf(true) }
     var explorerPaneWidthValue by rememberSaveable { mutableFloatStateOf(DEFAULT_EXPLORER_WIDTH) }
     var terminalPaneHeightValue by rememberSaveable { mutableFloatStateOf(DEFAULT_TERMINAL_HEIGHT) }
+    var editorFontSizeSp by rememberSaveable { mutableFloatStateOf(15f) }
+    var isFindReplaceVisible by rememberSaveable { mutableStateOf(false) }
+    var findQuery by rememberSaveable { mutableStateOf("") }
+    var replaceQuery by rememberSaveable { mutableStateOf("") }
+    var activeFindMatchIndex by rememberSaveable { mutableStateOf(0) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -218,6 +227,124 @@ private fun MainScreen(
 
     val currentEditorActions by rememberUpdatedState(editorActions)
     val currentEditorChanged by rememberUpdatedState(onEditorChanged)
+    val findMatches = remember(uiState.editorText, findQuery, isFindReplaceVisible) {
+        if (!isFindReplaceVisible) {
+            emptyList()
+        } else {
+            EditorSearchEngine.findMatches(uiState.editorText, findQuery)
+        }
+    }
+
+    LaunchedEffect(findMatches.size, findQuery, isFindReplaceVisible, uiState.selectedFilePath) {
+        activeFindMatchIndex = when {
+            !isFindReplaceVisible || findQuery.isBlank() || findMatches.isEmpty() -> 0
+            else -> activeFindMatchIndex.coerceIn(0, findMatches.lastIndex)
+        }
+    }
+
+    LaunchedEffect(isFindReplaceVisible, findQuery, findMatches, activeFindMatchIndex, uiState.editorText) {
+        editorBridge.input?.let { input ->
+            if (isFindReplaceVisible && findQuery.isNotBlank() && findMatches.isNotEmpty()) {
+                input.showSearchMatches(findMatches, activeFindMatchIndex.coerceIn(0, findMatches.lastIndex))
+            } else {
+                input.clearSearchHighlights()
+            }
+        }
+    }
+
+    val openFindReplace: () -> Unit = {
+        val selectedText = EditorInteractionHelper.selectedText(
+            editorBridge.input?.text?.toString(),
+            editorBridge.input?.selectionStart ?: 0,
+            editorBridge.input?.selectionEnd ?: 0
+        )
+        if (selectedText.isNotBlank()) {
+            findQuery = selectedText
+        }
+        isFindReplaceVisible = true
+        activeFindMatchIndex = 0
+    }
+    val jumpToFindMatch: (Int) -> Unit = { index ->
+        val editText = editorBridge.input
+        val match = findMatches.getOrNull(index)
+        if (editText != null && match != null) {
+            editText.revealRange(match.start, match.endExclusive)
+        }
+    }
+    val goToPreviousMatch: () -> Unit = {
+        if (findMatches.isEmpty()) {
+            showToast("No matches")
+        } else {
+            activeFindMatchIndex = if (activeFindMatchIndex <= 0) {
+                findMatches.lastIndex
+            } else {
+                activeFindMatchIndex - 1
+            }
+            jumpToFindMatch(activeFindMatchIndex)
+        }
+    }
+    val goToNextMatch: () -> Unit = {
+        if (findMatches.isEmpty()) {
+            showToast("No matches")
+        } else {
+            activeFindMatchIndex = if (activeFindMatchIndex >= findMatches.lastIndex) {
+                0
+            } else {
+                activeFindMatchIndex + 1
+            }
+            jumpToFindMatch(activeFindMatchIndex)
+        }
+    }
+    val replaceCurrentMatch: () -> Unit = {
+        val editText = activeEditor(editorBridge, currentEditorActions)
+        val match = findMatches.getOrNull(activeFindMatchIndex)
+        if (editText == null) {
+            Unit
+        } else if (match == null) {
+            currentEditorActions.showToast("No matches")
+        } else {
+            val editable = editText.text
+            if (editable != null) {
+                editable.replace(match.start, match.endExclusive, replaceQuery)
+                val cursor = (match.start + replaceQuery.length).coerceIn(0, editable.length)
+                editText.revealRange(cursor, cursor)
+                currentEditorActions.onStatusChanged("Replaced match", null)
+            }
+        }
+    }
+    val replaceAllMatches: () -> Unit = {
+        val editText = activeEditor(editorBridge, currentEditorActions)
+        if (editText == null) {
+            Unit
+        } else if (findMatches.isEmpty()) {
+            currentEditorActions.showToast("No matches")
+        } else {
+            val editable = editText.text
+            if (editable != null) {
+                val replacedText = EditorSearchEngine.replaceAll(
+                    text = editable.toString(),
+                    matches = findMatches,
+                    replacement = replaceQuery
+                )
+                editable.replace(0, editable.length, replacedText)
+                val cursor = (findMatches.first().start + replaceQuery.length).coerceIn(0, replacedText.length)
+                editText.revealRange(cursor, cursor)
+                currentEditorActions.onStatusChanged("Replaced ${findMatches.size} matches", null)
+            }
+        }
+    }
+    val decreaseFontSize: () -> Unit = {
+        val nextSize = (editorFontSizeSp - 1f).coerceAtLeast(12f)
+        editorFontSizeSp = nextSize
+        editorBridge.input?.setEditorFontSizeSp(nextSize)
+        currentEditorActions.onStatusChanged("Font ${nextSize.roundToInt()}sp", null)
+    }
+    val increaseFontSize: () -> Unit = {
+        val nextSize = (editorFontSizeSp + 1f).coerceAtMost(28f)
+        editorFontSizeSp = nextSize
+        editorBridge.input?.setEditorFontSizeSp(nextSize)
+        currentEditorActions.onStatusChanged("Font ${nextSize.roundToInt()}sp", null)
+    }
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -322,9 +449,17 @@ private fun MainScreen(
                                 .fillMaxWidth(),
                             fileName = uiState.selectedFileName ?: stringResource(R.string.editor_empty_title),
                             isDirty = uiState.isDirty,
+                            selectedFilePath = uiState.selectedFilePath,
                             editorText = uiState.editorText,
+                            editorDiagnostic = uiState.editorDiagnostic,
                             editorBridge = editorBridge,
                             syntaxHighlighter = syntaxHighlighter,
+                            editorFontSizeSp = editorFontSizeSp,
+                            isFindReplaceVisible = isFindReplaceVisible,
+                            findQuery = findQuery,
+                            replaceQuery = replaceQuery,
+                            findMatches = findMatches,
+                            activeFindMatchIndex = activeFindMatchIndex,
                             onSelectAll = {
                                 selectAllInEditor(editorBridge, currentEditorActions)
                             },
@@ -334,6 +469,21 @@ private fun MainScreen(
                             onPaste = {
                                 pasteIntoEditor(editorBridge, currentEditorActions)
                             },
+                            onOpenFind = openFindReplace,
+                            onCloseFind = { isFindReplaceVisible = false },
+                            onFindQueryChanged = { findQuery = it },
+                            onReplaceQueryChanged = { replaceQuery = it },
+                            onFindPrevious = goToPreviousMatch,
+                            onFindNext = goToNextMatch,
+                            onReplaceCurrent = replaceCurrentMatch,
+                            onReplaceAll = replaceAllMatches,
+                            onDecreaseFont = decreaseFontSize,
+                            onIncreaseFont = increaseFontSize,
+                            onFontSizeChanged = { newSize ->
+                                if (abs(editorFontSizeSp - newSize) >= 0.05f) {
+                                    editorFontSizeSp = newSize
+                                }
+                            },
                             onEditorChanged = currentEditorChanged,
                             onHandleShortcut = { editText, keyCode, event ->
                                 handleEditorShortcut(
@@ -341,7 +491,14 @@ private fun MainScreen(
                                     keyCode = keyCode,
                                     event = event,
                                     editorBridge = editorBridge,
-                                    actionContext = currentEditorActions
+                                    actionContext = currentEditorActions,
+                                    onUndo = {
+                                        undoInEditor(editorBridge, currentEditorActions, syntaxHighlighter)
+                                    },
+                                    onRedo = {
+                                        redoInEditor(editorBridge, currentEditorActions, syntaxHighlighter)
+                                    },
+                                    onFind = openFindReplace
                                 )
                             }
                         )
@@ -1309,17 +1466,37 @@ private fun EditorPane(
     modifier: Modifier,
     fileName: String,
     isDirty: Boolean,
+    selectedFilePath: String?,
     editorText: String,
+    editorDiagnostic: EditorDiagnostic?,
     editorBridge: EditorBridgeState,
     syntaxHighlighter: JavaSyntaxHighlighter,
+    editorFontSizeSp: Float,
+    isFindReplaceVisible: Boolean,
+    findQuery: String,
+    replaceQuery: String,
+    findMatches: List<EditorSearchMatch>,
+    activeFindMatchIndex: Int,
     onSelectAll: () -> Unit,
     onCopy: () -> Unit,
     onPaste: () -> Unit,
+    onOpenFind: () -> Unit,
+    onCloseFind: () -> Unit,
+    onFindQueryChanged: (String) -> Unit,
+    onReplaceQueryChanged: (String) -> Unit,
+    onFindPrevious: () -> Unit,
+    onFindNext: () -> Unit,
+    onReplaceCurrent: () -> Unit,
+    onReplaceAll: () -> Unit,
+    onDecreaseFont: () -> Unit,
+    onIncreaseFont: () -> Unit,
+    onFontSizeChanged: (Float) -> Unit,
     onEditorChanged: (String) -> Unit,
     onHandleShortcut: (EditText, Int, KeyEvent) -> Boolean
 ) {
     val currentHandleShortcut by rememberUpdatedState(onHandleShortcut)
     val currentEditorChanged by rememberUpdatedState(onEditorChanged)
+    val currentFontSizeChanged by rememberUpdatedState(onFontSizeChanged)
 
     Column(
         modifier = modifier.background(EditorSurface)
@@ -1405,10 +1582,58 @@ private fun EditorPane(
                     compact = true,
                     onClick = onPaste
                 )
+
+                ChromeActionButton(
+                    label = "FIND",
+                    enabled = true,
+                    highlighted = isFindReplaceVisible,
+                    compact = true,
+                    onClick = onOpenFind
+                )
+
+                ChromeActionButton(
+                    label = "A-",
+                    enabled = true,
+                    highlighted = false,
+                    compact = true,
+                    onClick = onDecreaseFont
+                )
+
+                ChromeActionButton(
+                    label = "A+",
+                    enabled = true,
+                    highlighted = false,
+                    compact = true,
+                    onClick = onIncreaseFont
+                )
+
+                Text(
+                    text = "${editorFontSizeSp.roundToInt()}sp",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp
+                )
             }
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        if (isFindReplaceVisible) {
+            FindReplaceBar(
+                query = findQuery,
+                replacement = replaceQuery,
+                matchCount = findMatches.size,
+                activeMatchIndex = activeFindMatchIndex,
+                onQueryChanged = onFindQueryChanged,
+                onReplacementChanged = onReplaceQueryChanged,
+                onPrevious = onFindPrevious,
+                onNext = onFindNext,
+                onReplace = onReplaceCurrent,
+                onReplaceAll = onReplaceAll,
+                onClose = onCloseFind
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
 
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -1417,8 +1642,9 @@ private fun EditorPane(
                 val horizontalPadding = (18f * density).toInt()
                 val verticalPadding = (16f * density).toInt()
 
-                EditText(context).apply {
+                CodeEditorEditText(context).apply {
                     editorBridge.input = this
+                    editorBridge.documentPath = selectedFilePath
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -1438,8 +1664,9 @@ private fun EditorPane(
                             InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                             InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                     imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
-                    setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
-                    setLineSpacing(5f * density, 1f)
+                    setEditorContentPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+                    setEditorFontSizeSp(editorFontSizeSp)
+                    this.onFontSizeChanged = { currentFontSizeChanged(it) }
                     setOnContextClickListener {
                         requestFocus()
                         performLongClick()
@@ -1463,19 +1690,128 @@ private fun EditorPane(
                             syntaxHighlighter.schedule(this@apply)
                         }
                     })
+                    loadDocument(editorText)
+                    syntaxHighlighter.highlightNow(this)
                 }
             },
             update = { editText ->
                 editorBridge.input = editText
-                if (editText.text.toString() != editorText) {
+                editText.onFontSizeChanged = { currentFontSizeChanged(it) }
+                if (abs(editText.currentFontSizeSp() - editorFontSizeSp) >= 0.05f) {
+                    editText.setEditorFontSizeSp(editorFontSizeSp)
+                }
+                if (editorBridge.documentPath != selectedFilePath) {
                     editorBridge.suppressCallbacks = true
-                    editText.setText(editorText)
-                    editText.setSelection(editorText.length)
+                    editText.loadDocument(editorText)
+                    syntaxHighlighter.highlightNow(editText)
+                    editorBridge.suppressCallbacks = false
+                    editorBridge.documentPath = selectedFilePath
+                } else if (editText.text.toString() != editorText) {
+                    editorBridge.suppressCallbacks = true
+                    editText.applyExternalStateText(editorText)
                     syntaxHighlighter.highlightNow(editText)
                     editorBridge.suppressCallbacks = false
                 }
+                editText.setDiagnosticLine(editorDiagnostic?.lineNumber)
+                if (editorDiagnostic == null) {
+                    editorBridge.lastDiagnosticRequestId = null
+                } else if (editorBridge.lastDiagnosticRequestId != editorDiagnostic.requestId) {
+                    editText.jumpToLine(editorDiagnostic.lineNumber)
+                    editorBridge.lastDiagnosticRequestId = editorDiagnostic.requestId
+                }
+                if (isFindReplaceVisible && findQuery.isNotBlank() && findMatches.isNotEmpty()) {
+                    editText.showSearchMatches(findMatches, activeFindMatchIndex.coerceIn(0, findMatches.lastIndex))
+                } else {
+                    editText.clearSearchHighlights()
+                }
             }
         )
+    }
+}
+
+@Composable
+private fun FindReplaceBar(
+    query: String,
+    replacement: String,
+    matchCount: Int,
+    activeMatchIndex: Int,
+    onQueryChanged: (String) -> Unit,
+    onReplacementChanged: (String) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onReplace: () -> Unit,
+    onReplaceAll: () -> Unit,
+    onClose: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SurfaceContainer)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
+                value = query,
+                onValueChange = onQueryChanged,
+                singleLine = true,
+                label = { Text(text = stringResource(R.string.find_label)) }
+            )
+
+            Text(
+                text = if (matchCount == 0) "0/0" else "${activeMatchIndex + 1}/$matchCount",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp
+            )
+
+            TextButton(onClick = onPrevious) {
+                Text(text = stringResource(R.string.find_prev))
+            }
+
+            TextButton(onClick = onNext) {
+                Text(text = stringResource(R.string.find_next))
+            }
+
+            TextButton(onClick = onClose) {
+                Text(text = stringResource(R.string.find_close))
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                modifier = Modifier.weight(1f),
+                value = replacement,
+                onValueChange = onReplacementChanged,
+                singleLine = true,
+                label = { Text(text = stringResource(R.string.replace_label)) }
+            )
+
+            TextButton(onClick = onReplace) {
+                Text(text = stringResource(R.string.replace_action))
+            }
+
+            TextButton(onClick = onReplaceAll) {
+                Text(text = stringResource(R.string.replace_all_action))
+            }
+        }
     }
 }
 
@@ -1601,11 +1937,15 @@ private fun rememberFileCountLabel(fileCount: Int): String {
 }
 
 private class EditorBridgeState {
-    var input: EditText? = null
+    var input: CodeEditorEditText? = null
+    var documentPath: String? = null
+    var lastDiagnosticRequestId: Long? = null
     var suppressCallbacks: Boolean = false
 
     fun clear() {
         input = null
+        documentPath = null
+        lastDiagnosticRequestId = null
         suppressCallbacks = false
     }
 }
@@ -1630,7 +1970,7 @@ private fun activeEditor(
     editorBridge: EditorBridgeState,
     actionContext: EditorActionContext,
     showMissingEditorMessage: Boolean = true
-): EditText? {
+): CodeEditorEditText? {
     val editText = editorBridge.input
     if (editText == null) {
         if (showMissingEditorMessage) {
@@ -1757,6 +2097,34 @@ private fun selectAllInEditor(
     }
 }
 
+private fun undoInEditor(
+    editorBridge: EditorBridgeState,
+    actionContext: EditorActionContext,
+    syntaxHighlighter: JavaSyntaxHighlighter
+) {
+    val editText = activeEditor(editorBridge, actionContext) ?: return
+    if (!editText.undoTextChange()) {
+        actionContext.showToast("Nothing to undo")
+        return
+    }
+    syntaxHighlighter.highlightNow(editText)
+    actionContext.onStatusChanged("Undo", null)
+}
+
+private fun redoInEditor(
+    editorBridge: EditorBridgeState,
+    actionContext: EditorActionContext,
+    syntaxHighlighter: JavaSyntaxHighlighter
+) {
+    val editText = activeEditor(editorBridge, actionContext) ?: return
+    if (!editText.redoTextChange()) {
+        actionContext.showToast("Nothing to redo")
+        return
+    }
+    syntaxHighlighter.highlightNow(editText)
+    actionContext.onStatusChanged("Redo", null)
+}
+
 private fun runEditorCommandIfAllowed(
     actionContext: EditorActionContext,
     requiresMavenProject: Boolean = false,
@@ -1778,7 +2146,10 @@ private fun handleEditorShortcut(
     keyCode: Int,
     event: KeyEvent,
     editorBridge: EditorBridgeState,
-    actionContext: EditorActionContext
+    actionContext: EditorActionContext,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onFind: () -> Unit
 ): Boolean {
     if (event.action != KeyEvent.ACTION_DOWN) {
         return false
@@ -1816,6 +2187,21 @@ private fun handleEditorShortcut(
             true
         }
 
+        event.isCtrlPressed && event.isShiftPressed && keyCode == KeyEvent.KEYCODE_Z -> {
+            onRedo()
+            true
+        }
+
+        event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_Z -> {
+            onUndo()
+            true
+        }
+
+        event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_Y -> {
+            onRedo()
+            true
+        }
+
         event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_R -> {
             runEditorCommandIfAllowed(actionContext) {
                 actionContext.onRun()
@@ -1834,6 +2220,11 @@ private fun handleEditorShortcut(
             runEditorCommandIfAllowed(actionContext, requiresMavenProject = true) {
                 actionContext.onResolveDependencies()
             }
+            true
+        }
+
+        event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_F -> {
+            onFind()
             true
         }
 
