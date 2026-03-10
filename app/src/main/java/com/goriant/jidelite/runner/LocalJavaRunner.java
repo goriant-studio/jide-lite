@@ -118,7 +118,7 @@ public class LocalJavaRunner implements CodeRunner {
                 : commandTrace(entryPoint.sourceFile);
 
         try {
-            compileSources(entryPoint.sourceFile, sourceRoots, classesDir, dependencyResolution.getCompileJars());
+            compileSources(sourceFiles, classesDir, dependencyResolution.getCompileJars());
         } catch (CompileException exception) {
             String errorText = normalizeCompilerText(exception.getMessage(), "");
             return new RunResult(false, compileCommand, errorText.isEmpty() ? "Compilation failed." : errorText, 1);
@@ -273,8 +273,7 @@ public class LocalJavaRunner implements CodeRunner {
     }
 
     private void compileSources(
-            File entryPointFile,
-            List<File> sourceRoots,
+            List<File> sourceFiles,
             File classesDir,
             List<File> compileJars
     ) throws CompileException, IOException {
@@ -284,19 +283,16 @@ public class LocalJavaRunner implements CodeRunner {
         compiler.setEncoding(StandardCharsets.UTF_8);
         compiler.setDestinationDirectory(classesDir, false);
 
-        // Janino 3.1.12 multi-file compilation strategy:
-        // - Only pass the entry point file to compiler.compile().
-        // - setIClassLoader() first with JAR deps as the base loader.
-        // - setSourcePath() second: Janino internally wraps the current IClassLoader with
-        //   a JavaSourceIClassLoader pointed at the source roots. When the compiler
-        //   encounters an unknown type (e.g. demo.Person) while compiling Main.java, it
-        //   looks up demo/Person.java via the source path, compiles it on-demand, and
-        //   continues. Passing ALL source files explicitly AND using setSourcePath causes
-        //   double-compilation conflicts ("does not declare a class with the same name").
+        // Janino 3.1.12 local-project compilation strategy:
+        // - Compile the full workspace source set in one compiler invocation.
+        // - Keep only the dependency class loader layer (JARs + app runtime).
+        //
+        // This mirrors javac-style project compilation and avoids Janino source-path
+        // lookup edge cases that can fail to resolve simple same-package types
+        // (e.g. Main.java referencing Person from Person.java).
         compiler.setIClassLoader(buildCompilerClassLoader(compileJars));
-        compiler.setSourcePath(sourceRoots.toArray(new File[0]));
 
-        compiler.compile(new File[]{entryPointFile});
+        compiler.compile(sourceFiles.toArray(new File[0]));
     }
 
     private IClassLoader buildCompilerClassLoader(List<File> compileJars) {
@@ -308,8 +304,7 @@ public class LocalJavaRunner implements CodeRunner {
         // Layer 1 - app ClassLoader: resolves java.lang.*, android.*, etc.
         IClassLoader base = new ClassLoaderIClassLoader(parentClassLoader);
 
-        // Layer 2 - Maven JAR dependencies.
-        // setSourcePath() adds Layer 3 (workspace .java source files) on top of this.
+        // Layer 2 - Maven JAR dependencies used during compilation.
         if (compileJars == null || compileJars.isEmpty()) {
             return base;
         }
