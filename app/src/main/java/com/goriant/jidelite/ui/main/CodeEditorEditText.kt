@@ -30,7 +30,7 @@ class CodeEditorEditText @JvmOverloads constructor(
         private const val DEFAULT_FONT_SIZE_SP = 13f
         private const val MIN_FONT_SIZE_SP = 12f
         private const val MAX_FONT_SIZE_SP = 28f
-        private const val MIN_LINE_NUMBER_DIGITS = 2
+        private const val MIN_LINE_NUMBER_DIGITS = 3
     }
 
     private var searchMatchColor = ContextCompat.getColor(context, R.color.editor_search_match)
@@ -52,7 +52,8 @@ class CodeEditorEditText @JvmOverloads constructor(
         color = gutterDividerColor
     }
     private val lineNumberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textAlign = Paint.Align.LEFT
+        textAlign = Paint.Align.RIGHT
+        isSubpixelText = true
     }
     private val errorLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -75,6 +76,8 @@ class CodeEditorEditText @JvmOverloads constructor(
     private var suppressHistoryRecording = false
     private var errorLineNumber: Int? = null
 
+    private var sourceLineCount = 1
+
     var onFontSizeChanged: ((Float) -> Unit)? = null
     var onGutterWidthChanged: ((Int) -> Unit)? = null
     var onContentStartChanged: ((Int) -> Unit)? = null
@@ -84,10 +87,24 @@ class CodeEditorEditText @JvmOverloads constructor(
         setEditorFontSizeSp(DEFAULT_FONT_SIZE_SP)
         addTextChangedListener(
             object : TextWatcher {
+                private var removedNewlines = 0
+
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                    removedNewlines = 0
+                    if (s == null || count <= 0) return
+                    for (i in start until (start + count).coerceAtMost(s.length)) {
+                        if (s[i] == '\n') removedNewlines++
+                    }
                 }
 
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    var addedNewlines = 0
+                    if (s != null && count > 0) {
+                        for (i in start until (start + count).coerceAtMost(s.length)) {
+                            if (s[i] == '\n') addedNewlines++
+                        }
+                    }
+                    sourceLineCount = (sourceLineCount - removedNewlines + addedNewlines).coerceAtLeast(1)
                 }
 
                 override fun afterTextChanged(s: Editable?) {
@@ -172,7 +189,7 @@ class CodeEditorEditText @JvmOverloads constructor(
             selectionStart = selectionStart.coerceIn(0, text.length),
             selectionEnd = selectionEnd.coerceIn(0, text.length)
         )
-        applySnapshot(snapshot)
+        applySnapshot(snapshot, resetGutter = true)
         history.reset(snapshot)
     }
 
@@ -272,7 +289,7 @@ class CodeEditorEditText @JvmOverloads constructor(
 
     fun currentGutterWidthPx(): Int = gutterWidthPx
 
-    fun currentContentStartPx(): Int = gutterWidthPx + basePaddingLeftPx
+    fun currentContentStartPx(): Int = compoundPaddingLeft
 
     private fun clearSearchHighlights(editable: Editable) {
         editable.getSpans(0, editable.length, BackgroundColorSpan::class.java).forEach { span ->
@@ -315,68 +332,136 @@ class CodeEditorEditText @JvmOverloads constructor(
     private fun drawErrorLine(canvas: Canvas) {
         val targetLineNumber = errorLineNumber ?: return
         val currentLayout = layout ?: return
-        if (currentLayout.lineCount <= 0) {
-            return
+        val textStr = text?.toString() ?: ""
+
+        // Tìm visual lines tương ứng với logical line (để highlight toàn bộ khi có wrap text)
+        var currentLogical = 1
+        var visualStart = -1
+        var visualEnd = -1
+
+        for (lineIndex in 0 until currentLayout.lineCount) {
+            val lineStartOffset = currentLayout.getLineStart(lineIndex)
+            val isLogicalStart = lineStartOffset == 0 || (lineStartOffset > 0 && textStr[lineStartOffset - 1] == '\n')
+
+            if (isLogicalStart) {
+                if (visualStart != -1) break
+                if (currentLogical == targetLineNumber) {
+                    visualStart = lineIndex
+                    visualEnd = lineIndex
+                }
+                currentLogical++
+            } else if (visualStart != -1) {
+                visualEnd = lineIndex
+            }
         }
 
-        val lineIndex = (targetLineNumber - 1).coerceIn(0, currentLayout.lineCount - 1)
-        val top = totalPaddingTop + currentLayout.getLineTop(lineIndex) - scrollY
-        val bottom = totalPaddingTop + currentLayout.getLineBottom(lineIndex) - scrollY
-        if (bottom < 0 || top > height) {
-            return
-        }
+        if (visualStart == -1) return
 
-        val fixedLeft = scrollX.toFloat()
-        canvas.drawRect(fixedLeft + gutterWidthPx, top.toFloat(), fixedLeft + width, bottom.toFloat(), errorLinePaint)
+        val top = totalPaddingTop + currentLayout.getLineTop(visualStart)
+        val bottom = totalPaddingTop + currentLayout.getLineBottom(visualEnd)
+
+        if (bottom < scrollY || top > scrollY + height) return
+
+        val contentLeft = scrollX + gutterWidthPx.toFloat()
+        val saveCount = canvas.save()
+        canvas.clipRect(contentLeft, scrollY.toFloat(), scrollX + width.toFloat(), scrollY + height.toFloat())
+        canvas.drawRect(contentLeft, top.toFloat(), scrollX + width.toFloat(), bottom.toFloat(), errorLinePaint)
+        canvas.restoreToCount(saveCount)
     }
 
     private fun drawGutterBackground(canvas: Canvas) {
-        val fixedLeft = scrollX.toFloat()
-        canvas.drawRect(fixedLeft, 0f, fixedLeft + gutterWidthPx, height.toFloat(), gutterPaint)
+        val gutterRight = scrollX + gutterWidthPx.toFloat()
+        val saveCount = canvas.save()
+
+        // Cố định gutter vào lề trái màn hình viewport bằng cách tịnh tiến theo scrollX, scrollY
+        canvas.clipRect(scrollX.toFloat(), scrollY.toFloat(), gutterRight, scrollY + height.toFloat())
+        canvas.drawRect(scrollX.toFloat(), scrollY.toFloat(), gutterRight, scrollY + height.toFloat(), gutterPaint)
         canvas.drawLine(
-            fixedLeft + gutterWidthPx - gutterDividerPaint.strokeWidth / 2f,
-            0f,
-            fixedLeft + gutterWidthPx - gutterDividerPaint.strokeWidth / 2f,
-            height.toFloat(),
+            gutterRight - gutterDividerPaint.strokeWidth / 2f,
+            scrollY.toFloat(),
+            gutterRight - gutterDividerPaint.strokeWidth / 2f,
+            scrollY + height.toFloat(),
             gutterDividerPaint
         )
+        canvas.restoreToCount(saveCount)
     }
 
     private fun drawLineNumbers(canvas: Canvas) {
         val currentLayout = layout ?: return
-        val fixedLeft = scrollX.toFloat()
-        val currentLine = selectionStart.takeIf { it >= 0 }?.let(currentLayout::getLineForOffset) ?: -1
+        val textStr = text?.toString() ?: ""
+        val saveCount = canvas.save()
+
+        val gutterRight = scrollX + gutterWidthPx.toFloat()
+        canvas.clipRect(scrollX.toFloat(), scrollY.toFloat(), gutterRight, scrollY + height.toFloat())
+
+        val xAnchor = gutterRight - gutterHorizontalPaddingPx.toFloat()
+
+        // Tính toán dòng đang được trỏ chuột (logical line)
+        var cursorLogicalLine = -1
+        if (selectionStart >= 0 && selectionStart <= textStr.length) {
+            var newlinesBeforeCursor = 0
+            for (i in 0 until selectionStart) {
+                if (textStr[i] == '\n') newlinesBeforeCursor++
+            }
+            cursorLogicalLine = newlinesBeforeCursor + 1
+        }
+
+        var logicalLineNumber = 1
 
         for (lineIndex in 0 until currentLayout.lineCount) {
-            val lineTop = totalPaddingTop + currentLayout.getLineTop(lineIndex) - scrollY
-            val lineBottom = totalPaddingTop + currentLayout.getLineBottom(lineIndex) - scrollY
-            if (lineBottom < 0 || lineTop > height) {
+            val lineStartOffset = currentLayout.getLineStart(lineIndex)
+            // Xác định xem dòng hiển thị này có phải là sự bắt đầu của một đoạn code thực tế (không phải từ bị bẻ dòng)
+            val isLogicalLineStart = lineStartOffset == 0 || (lineStartOffset > 0 && textStr[lineStartOffset - 1] == '\n')
+
+            val lineTop = totalPaddingTop + currentLayout.getLineTop(lineIndex)
+            val lineBottom = totalPaddingTop + currentLayout.getLineBottom(lineIndex)
+
+            // Bỏ qua vẽ nếu nằm ngoài khung nhìn (culling) nhưng vẫn phải đếm số dòng
+            if (lineBottom < scrollY || lineTop > scrollY + height) {
+                if (isLogicalLineStart) logicalLineNumber++
                 continue
             }
 
-            lineNumberPaint.color = when (lineIndex + 1) {
-                errorLineNumber -> errorLineNumberColor
-                currentLine + 1 -> activeLineNumberColor
-                else -> lineNumberColor
-            }
+            if (isLogicalLineStart) {
+                val isCurrentLine = logicalLineNumber == cursorLogicalLine
+                val isErrorLine = logicalLineNumber == errorLineNumber
 
-            val label = (lineIndex + 1).toString()
-            val baseline = centeredLineNumberBaseline(currentLayout, lineIndex)
-            val x = fixedLeft + gutterWidthPx - gutterHorizontalPaddingPx - lineNumberPaint.measureText(label)
-            canvas.drawText(label, x, baseline, lineNumberPaint)
+                lineNumberPaint.color = when {
+                    isErrorLine -> errorLineNumberColor
+                    isCurrentLine -> activeLineNumberColor
+                    else -> lineNumberColor
+                }
+                lineNumberPaint.isFakeBoldText = isCurrentLine
+
+                val label = logicalLineNumber.toString()
+
+                val lineHeight = (lineBottom - lineTop).toFloat()
+                val fontMetrics = lineNumberPaint.fontMetrics
+                val textHeight = fontMetrics.descent - fontMetrics.ascent
+                val baseline = lineTop + (lineHeight - textHeight) / 2f - fontMetrics.ascent
+
+                canvas.drawText(label, xAnchor, baseline, lineNumberPaint)
+                logicalLineNumber++
+            }
         }
+        canvas.restoreToCount(saveCount)
     }
 
     private fun updateLineNumberPaint() {
         lineNumberPaint.textSize = textSize * 0.78f
         lineNumberPaint.typeface = typeface ?: Typeface.MONOSPACE
         lineNumberPaint.isSubpixelText = true
+        lineNumberPaint.textAlign = Paint.Align.RIGHT
     }
 
-    private fun updateGutterPadding() {
-        val digits = max(MIN_LINE_NUMBER_DIGITS, max(lineCount, 1).toString().length)
-        val desiredGutterWidth = (gutterHorizontalPaddingPx * 2 + lineNumberPaint.measureText("8".repeat(digits))).roundToInt()
-        if (desiredGutterWidth == gutterWidthPx &&
+    private fun updateGutterPadding(forceReset: Boolean = false) {
+        val digits = max(MIN_LINE_NUMBER_DIGITS, sourceLineCount.toString().length)
+        val numberWidth = lineNumberPaint.measureText("8".repeat(digits))
+        val desiredGutterWidth = (gutterHorizontalPaddingPx * 2 + numberWidth + density).roundToInt()
+
+        val newGutterWidth = if (forceReset) desiredGutterWidth else max(gutterWidthPx, desiredGutterWidth)
+
+        if (newGutterWidth == gutterWidthPx &&
             paddingLeft == basePaddingLeftPx + gutterWidthPx &&
             paddingTop == basePaddingTopPx &&
             paddingRight == basePaddingRightPx &&
@@ -385,7 +470,7 @@ class CodeEditorEditText @JvmOverloads constructor(
             return
         }
 
-        gutterWidthPx = desiredGutterWidth
+        gutterWidthPx = newGutterWidth
         super.setPadding(
             basePaddingLeftPx + gutterWidthPx,
             basePaddingTopPx,
@@ -410,7 +495,7 @@ class CodeEditorEditText @JvmOverloads constructor(
         val viewportRight = scrollX + width - contentClipEndPx()
         val anchorLine = currentLayout.getLineForOffset(anchorOffset)
         val selectionEndOnAnchorLine = selectionEndExclusive > selectionStart &&
-            currentLayout.getLineForOffset((selectionEndExclusive - 1).coerceAtLeast(selectionStart)) == anchorLine
+                currentLayout.getLineForOffset((selectionEndExclusive - 1).coerceAtLeast(selectionStart)) == anchorLine
 
         val anchorLeft = horizontalPositionForOffset(currentLayout, anchorOffset)
         val selectionRight = if (selectionEndOnAnchorLine) {
@@ -436,15 +521,6 @@ class CodeEditorEditText @JvmOverloads constructor(
         return compoundPaddingLeft + currentLayout.getPrimaryHorizontal(safeOffset)
     }
 
-    private fun centeredLineNumberBaseline(currentLayout: Layout, lineIndex: Int): Float {
-        val lineTop = totalPaddingTop + currentLayout.getLineTop(lineIndex) - scrollY
-        val lineBottom = totalPaddingTop + currentLayout.getLineBottom(lineIndex) - scrollY
-        val lineHeight = (lineBottom - lineTop).toFloat()
-        val fontMetrics = lineNumberPaint.fontMetrics
-        val textHeight = fontMetrics.descent - fontMetrics.ascent
-        return lineTop + (lineHeight - textHeight) / 2f - fontMetrics.ascent
-    }
-
     private fun currentSnapshot(): EditorSnapshot {
         val currentText = text?.toString().orEmpty()
         return EditorSnapshot(
@@ -454,7 +530,9 @@ class CodeEditorEditText @JvmOverloads constructor(
         )
     }
 
-    private fun applySnapshot(snapshot: EditorSnapshot) {
+    private fun applySnapshot(snapshot: EditorSnapshot, resetGutter: Boolean = false) {
+        // Đã xóa phần pre-compute `sourceLineCount` bị lỗi logic khi load dữ liệu,
+        // để nhường hoàn toàn cho TextWatcher xử lý increment đúng chuẩn.
         suppressHistoryRecording = true
         setText(snapshot.text)
         setSelection(
@@ -462,7 +540,7 @@ class CodeEditorEditText @JvmOverloads constructor(
             snapshot.selectionEnd.coerceIn(0, snapshot.text.length)
         )
         suppressHistoryRecording = false
-        updateGutterPadding()
+        updateGutterPadding(forceReset = resetGutter)
         invalidate()
     }
 
@@ -524,7 +602,6 @@ class CodeEditorEditText @JvmOverloads constructor(
         }
 
         fun hasUndo(): Boolean = undoStack.isNotEmpty()
-
         fun hasRedo(): Boolean = redoStack.isNotEmpty()
     }
 }

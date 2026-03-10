@@ -586,7 +586,7 @@ public class FileStorageHelper {
                 
                         System.out.println(title);
                         System.out.println("Loaded: " + libraryName);
-                        Person p = new Person("Lucas", 28);
+                        Person p = new Person("James Gosling ❤️", "Father of Java", 71);
                         System.out.println(p.name());
                         System.out.println(p.age());
                         System.out.println(p);
@@ -602,9 +602,11 @@ public class FileStorageHelper {
                 public class Person {
                     private String name;
                     private int age;
+                    private String achievements;
                 
-                    public Person(String name, int age){
+                    public Person(String name, String achievements, int age){
                         this.name = name;
+                        this.achievements = achievements;
                         this.age = age;
                     }
                 
@@ -617,8 +619,10 @@ public class FileStorageHelper {
                     }
                 
                     public String toString(){
-                        return "Name: " + this.name + " - Age: " + this.age;
+                        return "Name: " + this.name + " | Achievements: " + this.achievements + " | Age: " + this.age;
                     }
+                    
+                    public static void main(String[] args) {}
                 }
                 """;
     }
