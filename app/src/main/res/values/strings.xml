@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">J-IDE Lite</string>
-    <string name="app_version">v2.1.0</string>
+    <string name="app_version">v3.0.0</string>
     <string name="app_name_short">J-IDE</string>
 
     <string name="action_resolve_short">Build</string>
