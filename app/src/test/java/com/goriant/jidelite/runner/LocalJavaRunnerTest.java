@@ -290,6 +290,43 @@ public class LocalJavaRunnerTest {
         assertThat(dexDir.listFiles((dir, name) -> name.endsWith(".dex"))).isNotEmpty();
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void compileSourcesCompilesPeerTypesReferencedBySimpleName() throws Exception {
+        File mainFile = writeSource(
+                "src/main/java/demo/Main.java",
+                "package demo;\n"
+                        + "public class Main {\n"
+                        + "  public static void main(String[] args) {\n"
+                        + "    Person person = new Person(\"Ava\");\n"
+                        + "    System.out.println(person.name());\n"
+                        + "  }\n"
+                        + "}\n"
+        );
+        File personFile = writeSource(
+                "src/main/java/demo/Person.java",
+                "package demo;\n"
+                        + "public class Person {\n"
+                        + "  private final String name;\n"
+                        + "  public Person(String name) { this.name = name; }\n"
+                        + "  public String name() { return this.name; }\n"
+                        + "}\n"
+        );
+        File classesDir = new File(rootDirectory, "classes");
+        assertThat(classesDir.mkdirs()).isTrue();
+
+        invokePrivate(
+                "compileSources",
+                new Class<?>[]{List.class, File.class, List.class},
+                Arrays.asList(mainFile, personFile),
+                classesDir,
+                Collections.emptyList()
+        );
+
+        assertThat(new File(classesDir, "demo/Main.class")).exists();
+        assertThat(new File(classesDir, "demo/Person.class")).exists();
+    }
+
     private File writeSource(String relativePath, String content) throws Exception {
         File file = new File(workspaceDirectory, relativePath);
         File parent = file.getParentFile();

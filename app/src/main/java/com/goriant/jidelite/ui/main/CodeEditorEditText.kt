@@ -103,8 +103,14 @@ class CodeEditorEditText @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         drawErrorLine(canvas)
+        drawGutterBackground(canvas)
+
+        val saveCount = canvas.save()
+        canvas.clipRect(scrollX + gutterWidthPx, scrollY, scrollX + width, scrollY + height)
         super.onDraw(canvas)
-        drawGutter(canvas)
+        canvas.restoreToCount(saveCount)
+
+        drawLineNumbers(canvas)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -268,11 +274,8 @@ class CodeEditorEditText @JvmOverloads constructor(
         canvas.drawRect(fixedLeft, top.toFloat(), fixedLeft + width, bottom.toFloat(), errorLinePaint)
     }
 
-    private fun drawGutter(canvas: Canvas) {
-        val currentLayout = layout ?: return
+    private fun drawGutterBackground(canvas: Canvas) {
         val fixedLeft = scrollX.toFloat()
-        val currentLine = selectionStart.takeIf { it >= 0 }?.let(currentLayout::getLineForOffset) ?: -1
-
         canvas.drawRect(fixedLeft, 0f, fixedLeft + gutterWidthPx, height.toFloat(), gutterPaint)
         canvas.drawLine(
             fixedLeft + gutterWidthPx - gutterDividerPaint.strokeWidth / 2f,
@@ -281,6 +284,12 @@ class CodeEditorEditText @JvmOverloads constructor(
             height.toFloat(),
             gutterDividerPaint
         )
+    }
+
+    private fun drawLineNumbers(canvas: Canvas) {
+        val currentLayout = layout ?: return
+        val fixedLeft = scrollX.toFloat()
+        val currentLine = selectionStart.takeIf { it >= 0 }?.let(currentLayout::getLineForOffset) ?: -1
 
         for (lineIndex in 0 until currentLayout.lineCount) {
             val lineTop = totalPaddingTop + currentLayout.getLineTop(lineIndex) - scrollY

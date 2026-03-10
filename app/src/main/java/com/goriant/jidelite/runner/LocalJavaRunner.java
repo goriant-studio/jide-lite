@@ -29,7 +29,11 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,6 +46,9 @@ public class LocalJavaRunner implements CodeRunner {
             Pattern.compile("(?m)^\\s*package\\s+([A-Za-z_$][A-Za-z0-9_$.]*)\\s*;");
     private static final Pattern MAIN_METHOD_PATTERN = Pattern.compile(
             "(?s)\\bpublic\\s+static\\s+void\\s+main\\s*\\(\\s*String\\s*(?:\\[\\s*]|\\.\\.\\.)\\s*[A-Za-z_$][A-Za-z0-9_$]*\\s*\\)"
+    );
+    private static final Pattern IMPORT_PATTERN = Pattern.compile(
+            "(?m)^\\s*import\\s+(?:static\\s+)?([A-Za-z_$][A-Za-z0-9_$.]+)\\s*;"
     );
     private static final int MIN_API_FOR_DEX = 26;
     private static final String RESOLVE_COMMAND = "$ mvn dependency:resolve";
@@ -118,7 +125,15 @@ public class LocalJavaRunner implements CodeRunner {
                 : commandTrace(entryPoint.sourceFile);
 
         try {
-            compileSources(entryPoint.sourceFile, sourceRoots, classesDir, dependencyResolution.getCompileJars());
+<<<<<<< ours
+<<<<<<< ours
+            compileSources(entryPoint.sourceFile, sourceFiles, classesDir, dependencyResolution.getCompileJars());
+=======
+            compileSources(sourceFiles, classesDir, dependencyResolution.getCompileJars());
+>>>>>>> theirs
+=======
+            compileSources(sourceFiles, classesDir, dependencyResolution.getCompileJars());
+>>>>>>> theirs
         } catch (CompileException exception) {
             String errorText = normalizeCompilerText(exception.getMessage(), "");
             return new RunResult(false, compileCommand, errorText.isEmpty() ? "Compilation failed." : errorText, 1);
@@ -272,9 +287,60 @@ public class LocalJavaRunner implements CodeRunner {
         return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
     }
 
+    /**
+     * Compiles workspace source files in correct dependency order.
+     *
+     * Algorithm:
+     *  1. Build a map of qualifiedClassName -> File for every source file in the workspace.
+     *  2. Starting from the entry point, walk the import graph depth-first (DFS).
+     *     Same-package files are treated as implicit dependencies.
+     *  3. Files emerge from the DFS in post-order, i.e. every dependency appears before
+     *     the file that depends on it.
+     *  4. Compile each file in that order using a fresh Janino Compiler.
+     *     The IClassLoader always points at classesDir, which accumulates compiled
+     *     .class files after each step — so later files can resolve earlier ones.
+     *
+     * This avoids all Janino setSourcePath / setIClassLoader ordering pitfalls and
+     * mirrors the way javac resolves multi-file projects.
+     */
     private void compileSources(
+<<<<<<< ours
+<<<<<<< ours
             File entryPointFile,
-            List<File> sourceRoots,
+            List<File> allSourceFiles,
+            File classesDir,
+            List<File> compileJars
+    ) throws CompileException, IOException {
+
+        // Step 1: build qualifiedClassName -> File map
+        Map<String, File> classToFile = new LinkedHashMap<>();
+        for (File f : allSourceFiles) {
+            String src = readUtf8(f);
+            String qualifiedName = qualifyClassName(src, classNameFor(f));
+            classToFile.put(qualifiedName, f);
+        }
+
+        // Step 2 & 3: DFS from entry point -> post-order compilation list
+        List<File> compilationOrder = new ArrayList<>();
+        Set<File> visited = new LinkedHashSet<>();
+        resolveCompilationOrder(entryPointFile, classToFile, visited, compilationOrder);
+
+        // Step 4: compile each file in dependency order
+        for (File sourceFile : compilationOrder) {
+            Compiler compiler = new Compiler();
+            compiler.setSourceVersion(8);
+            compiler.setTargetVersion(8);
+            compiler.setEncoding(StandardCharsets.UTF_8);
+            compiler.setDestinationDirectory(classesDir, false);
+            // classesDir already contains .class files from previous iterations,
+            // so the next file can resolve types compiled in earlier steps.
+            compiler.setIClassLoader(buildCompilerClassLoader(compileJars, classesDir));
+            compiler.compile(new File[]{sourceFile});
+        }
+=======
+=======
+>>>>>>> theirs
+            List<File> sourceFiles,
             File classesDir,
             List<File> compileJars
     ) throws CompileException, IOException {
@@ -284,37 +350,120 @@ public class LocalJavaRunner implements CodeRunner {
         compiler.setEncoding(StandardCharsets.UTF_8);
         compiler.setDestinationDirectory(classesDir, false);
 
-        // Janino 3.1.12 multi-file compilation strategy:
-        // - Only pass the entry point file to compiler.compile().
-        // - setIClassLoader() first with JAR deps as the base loader.
-        // - setSourcePath() second: Janino internally wraps the current IClassLoader with
-        //   a JavaSourceIClassLoader pointed at the source roots. When the compiler
-        //   encounters an unknown type (e.g. demo.Person) while compiling Main.java, it
-        //   looks up demo/Person.java via the source path, compiles it on-demand, and
-        //   continues. Passing ALL source files explicitly AND using setSourcePath causes
-        //   double-compilation conflicts ("does not declare a class with the same name").
+<<<<<<< ours
+        // Janino 3.1.12 local-project compilation strategy:
+        // - Compile the full workspace source set in one compiler invocation.
+        // - Keep only the dependency class loader layer (JARs + app runtime).
+        //
+        // This mirrors javac-style project compilation and avoids Janino source-path
+        // lookup edge cases that can fail to resolve simple same-package types
+        // (e.g. Main.java referencing Person from Person.java).
         compiler.setIClassLoader(buildCompilerClassLoader(compileJars));
-        compiler.setSourcePath(sourceRoots.toArray(new File[0]));
 
-        compiler.compile(new File[]{entryPointFile});
+        compiler.compile(sourceFiles.toArray(new File[0]));
+>>>>>>> theirs
+=======
+        // Compile all workspace sources in a single pass. This ensures simple type names
+        // (for example, `Person` referenced from `Main`) are resolved from peer source
+        // units without relying on Janino's source-path lazy lookup behavior.
+        compiler.setIClassLoader(buildCompilerClassLoader(compileJars));
+        compiler.compile(sourceFiles.toArray(new File[0]));
+>>>>>>> theirs
     }
 
-    private IClassLoader buildCompilerClassLoader(List<File> compileJars) {
+    /**
+     * DFS traversal that produces a post-order list of files to compile.
+     * A file is appended only after all its own dependencies are appended first.
+     */
+    private void resolveCompilationOrder(
+            File file,
+            Map<String, File> classToFile,
+            Set<File> visited,
+            List<File> ordered
+    ) throws IOException {
+        if (visited.contains(file)) {
+            return;
+        }
+        visited.add(file); // mark before recursing to handle circular refs gracefully
+
+        String source = readUtf8(file);
+        String pkg = extractPackageName(source);
+
+        // Explicit imports that map to workspace source files
+        Matcher importMatcher = IMPORT_PATTERN.matcher(source);
+        while (importMatcher.find()) {
+            String importedName = importMatcher.group(1);
+            File dep = classToFile.get(importedName);
+            if (dep != null) {
+                resolveCompilationOrder(dep, classToFile, visited, ordered);
+            }
+        }
+
+        // Same-package files referenced without an explicit import statement
+        if (!pkg.isEmpty()) {
+            String pkgPrefix = pkg + ".";
+            for (Map.Entry<String, File> entry : classToFile.entrySet()) {
+                if (entry.getKey().startsWith(pkgPrefix) && !entry.getValue().equals(file)) {
+                    resolveCompilationOrder(entry.getValue(), classToFile, visited, ordered);
+                }
+            }
+        }
+
+        ordered.add(file); // post-order: this file goes AFTER all its dependencies
+    }
+
+    private String extractPackageName(String source) {
+        Matcher m = PACKAGE_PATTERN.matcher(source);
+        return m.find() ? m.group(1) : "";
+    }
+
+    /**
+     * Builds an IClassLoader chain that resolves (in lookup order):
+     *   1. Android/JDK classes via the app ClassLoader
+     *   2. Maven JAR dependencies via PathResourceFinder
+     *   3. Previously compiled .class files in classesDir via PathResourceFinder
+     *      (classesDir grows after each compile step, so later files resolve earlier ones)
+     *
+     * URLClassLoader is intentionally avoided — it throws UnsupportedOperationException
+     * on Android/Dalvik when Janino tries to use it for class resolution.
+     */
+    private IClassLoader buildCompilerClassLoader(List<File> compileJars, File classesDir) {
         ClassLoader parentClassLoader = appContext.getClassLoader();
         if (parentClassLoader == null) {
             parentClassLoader = LocalJavaRunner.class.getClassLoader();
         }
 
-        // Layer 1 - app ClassLoader: resolves java.lang.*, android.*, etc.
+        // Layer 1: Android/JDK classes (java.lang.*, android.*, etc.)
         IClassLoader base = new ClassLoaderIClassLoader(parentClassLoader);
 
-        // Layer 2 - Maven JAR dependencies.
-        // setSourcePath() adds Layer 3 (workspace .java source files) on top of this.
+<<<<<<< ours
+        // Layer 2: Maven JAR dependencies
+        IClassLoader withJars = base;
+        if (compileJars != null && !compileJars.isEmpty()) {
+            List<File> existingJars = new ArrayList<>();
+            for (File jar : compileJars) {
+                if (jar.exists()) existingJars.add(jar);
+            }
+            if (!existingJars.isEmpty()) {
+                withJars = new ResourceFinderIClassLoader(
+                        new PathResourceFinder(existingJars.toArray(new File[0])), base);
+            }
+=======
+        // Layer 2 - Maven JAR dependencies used during compilation.
         if (compileJars == null || compileJars.isEmpty()) {
             return base;
+>>>>>>> theirs
         }
-        return new ResourceFinderIClassLoader(
-                new PathResourceFinder(compileJars.toArray(new File[0])), base);
+
+        // Layer 3: Previously compiled .class files from classesDir.
+        // PathResourceFinder resolves "demo/Person.class" inside a directory tree,
+        // which is exactly what Janino needs when compiling the next file in the chain.
+        if (classesDir != null && classesDir.exists()) {
+            return new ResourceFinderIClassLoader(
+                    new PathResourceFinder(new File[]{classesDir}), withJars);
+        }
+
+        return withJars;
     }
 
     private void dexClasses(List<File> classFiles, List<File> runtimeJars, File dexDir) throws CompilationFailedException {
