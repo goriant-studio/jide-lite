@@ -19,6 +19,7 @@ import com.goriant.jidelite.data.enums.ProjectType
 import com.goriant.jidelite.editor.JavaCodeFormatter
 import com.goriant.jidelite.runner.CodeRunner
 import com.goriant.jidelite.storage.FileStorageHelper
+import com.goriant.jidelite.ui.theme.ThemeMode
 import java.io.File
 import java.io.IOException
 import java.util.Locale
@@ -36,6 +37,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val ACTIVE_FILE_KEY = "workbench.editor.activeFile"
         private const val SELECTED_ENTRY_KEY = "workbench.explorer.selectedEntry"
         private const val HISTORY_ENTRIES_KEY = "history.entries"
+        private const val THEME_MODE_KEY = "ux.theme.mode"
+        private const val ONBOARDING_SEEN_KEY = "ux.onboarding.seen"
         private const val MAX_HISTORY_ENTRIES = 200
     }
 
@@ -56,7 +59,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         MainUiState(
             terminalText = app.getString(R.string.terminal_ready),
             statusText = app.getString(R.string.status_ready),
-            workspacePath = fileStorageHelper.workspaceDirectory.absolutePath
+            workspacePath = fileStorageHelper.workspaceDirectory.absolutePath,
+            themeMode = resolveDefaultThemeMode()
         )
     )
         private set
@@ -65,6 +69,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     init {
+        restoreApplicationPreferences()
         loadWorkspace()
     }
 
@@ -409,6 +414,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun onToggleThemeRequested() {
+        val nextThemeMode = when (uiState.themeMode) {
+            ThemeMode.DARK -> ThemeMode.LIGHT
+            ThemeMode.LIGHT -> ThemeMode.DARK
+        }
+        val nextThemeLabel = if (nextThemeMode == ThemeMode.DARK) "Dark" else "Light"
+        uiState = uiState.copy(
+            themeMode = nextThemeMode,
+            statusText = "$nextThemeLabel theme"
+        )
+        emitToast(
+            app.getString(
+                if (nextThemeMode == ThemeMode.DARK) {
+                    R.string.toast_theme_dark
+                } else {
+                    R.string.toast_theme_light
+                }
+            )
+        )
+
+        try {
+            stateRepository.putState(APPLICATION_SCOPE, THEME_MODE_KEY, nextThemeMode.storageValue)
+        } catch (_: Throwable) {
+            // Ignore persistence issues to keep theme switching responsive.
+        }
+    }
+
+    fun dismissOnboarding() {
+        if (!uiState.isOnboardingVisible) {
+            return
+        }
+
+        uiState = uiState.copy(isOnboardingVisible = false)
+        try {
+            stateRepository.putState(APPLICATION_SCOPE, ONBOARDING_SEEN_KEY, "true")
+        } catch (_: Throwable) {
+            // Ignore persistence issues to avoid trapping the user in onboarding.
+        }
+    }
+
+    fun showOnboarding() {
+        if (uiState.isOnboardingVisible) {
+            return
+        }
+
+        uiState = uiState.copy(isOnboardingVisible = true)
+    }
+
+    fun prepareSelectedJavaFileForShare(): File? {
+        val selectedPath = uiState.selectedFilePath
+        val fileName = uiState.selectedFileName
+        if (selectedPath.isNullOrBlank() || fileName.isNullOrBlank()) {
+            emitToast(app.getString(R.string.toast_no_file_selected))
+            return null
+        }
+        if (!fileName.endsWith(".java", ignoreCase = true)) {
+            uiState = uiState.copy(statusText = "Share supports Java files only")
+            emitToast(app.getString(R.string.toast_share_java_only))
+            return null
+        }
+        if (!saveCurrentFile(showToast = false)) {
+            return null
+        }
+
+        val file = File(selectedPath)
+        if (!file.exists() || !file.isFile) {
+            uiState = uiState.copy(statusText = "Share failed")
+            emitToast(app.getString(R.string.toast_share_failed))
+            return null
+        }
+
+        uiState = uiState.copy(statusText = "Sharing $fileName")
+        return file
+    }
+
     fun updateStatus(statusText: String, toastMessage: String? = null) {
         uiState = uiState.copy(statusText = statusText)
         if (!toastMessage.isNullOrBlank()) {
@@ -445,6 +525,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
             emitToast("Could not initialize workspace")
+        }
+    }
+
+    private fun restoreApplicationPreferences() {
+        try {
+            val storedThemeMode = ThemeMode.fromStorage(stateRepository.getState(APPLICATION_SCOPE, THEME_MODE_KEY))
+            val hasSeenOnboarding = stateRepository.getState(APPLICATION_SCOPE, ONBOARDING_SEEN_KEY)
+                ?.equals("true", ignoreCase = true) == true
+            uiState = uiState.copy(
+                themeMode = storedThemeMode ?: resolveDefaultThemeMode(),
+                isOnboardingVisible = !hasSeenOnboarding
+            )
+        } catch (_: Throwable) {
+            uiState = uiState.copy(
+                themeMode = resolveDefaultThemeMode(),
+                isOnboardingVisible = true
+            )
         }
     }
 
@@ -881,6 +978,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             files.any { it.isFile && it.name == "build.gradle" } -> ProjectType.GRADLE
             else -> ProjectType.PLAIN_JAVA
         }
+    }
+
+    private fun resolveDefaultThemeMode(): ThemeMode {
+        return ThemeMode.DARK
     }
 
     private fun isSameOrChildPath(candidatePath: String, rootPath: String): Boolean {

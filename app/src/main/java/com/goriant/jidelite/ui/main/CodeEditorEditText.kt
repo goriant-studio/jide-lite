@@ -3,7 +3,9 @@ package com.goriant.jidelite.ui.main
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.text.Editable
+import android.text.Layout
 import android.text.Spanned
 import android.text.TextWatcher
 import android.text.style.BackgroundColorSpan
@@ -25,20 +27,20 @@ class CodeEditorEditText @JvmOverloads constructor(
 ) : AppCompatEditText(context, attrs, defStyleAttr) {
 
     companion object {
-        private const val DEFAULT_FONT_SIZE_SP = 15f
+        private const val DEFAULT_FONT_SIZE_SP = 13f
         private const val MIN_FONT_SIZE_SP = 12f
         private const val MAX_FONT_SIZE_SP = 28f
         private const val MIN_LINE_NUMBER_DIGITS = 2
     }
 
-    private val searchMatchColor = ContextCompat.getColor(context, R.color.editor_search_match)
-    private val activeSearchMatchColor = ContextCompat.getColor(context, R.color.editor_search_match_active)
-    private val gutterColor = ContextCompat.getColor(context, R.color.editor_gutter_bg)
-    private val gutterDividerColor = ContextCompat.getColor(context, R.color.editor_gutter_divider)
-    private val lineNumberColor = ContextCompat.getColor(context, R.color.editor_line_number)
-    private val activeLineNumberColor = ContextCompat.getColor(context, R.color.editor_line_number_active)
-    private val errorLineNumberColor = ContextCompat.getColor(context, R.color.editor_line_number_error)
-    private val errorLineColor = ContextCompat.getColor(context, R.color.editor_error_line_bg)
+    private var searchMatchColor = ContextCompat.getColor(context, R.color.editor_search_match)
+    private var activeSearchMatchColor = ContextCompat.getColor(context, R.color.editor_search_match_active)
+    private var gutterColor = ContextCompat.getColor(context, R.color.editor_gutter_bg)
+    private var gutterDividerColor = ContextCompat.getColor(context, R.color.editor_gutter_divider)
+    private var lineNumberColor = ContextCompat.getColor(context, R.color.editor_line_number)
+    private var activeLineNumberColor = ContextCompat.getColor(context, R.color.editor_line_number_active)
+    private var errorLineNumberColor = ContextCompat.getColor(context, R.color.editor_line_number_error)
+    private var errorLineColor = ContextCompat.getColor(context, R.color.editor_error_line_bg)
 
     private val gutterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -61,7 +63,9 @@ class CodeEditorEditText @JvmOverloads constructor(
     private val scaleDetector = ScaleGestureDetector(context, FontScaleListener())
     private val density = resources.displayMetrics.density
     private val scaledDensity = density * resources.configuration.fontScale
-    private val gutterHorizontalPaddingPx = (10f * density).roundToInt()
+    private val gutterHorizontalPaddingPx = (9f * density).roundToInt()
+    private val minimumContentClearancePx = (10f * density).roundToInt()
+    private val revealCursorWidthPx = max(2f * density, 1f)
 
     private var basePaddingLeftPx = 0
     private var basePaddingTopPx = 0
@@ -72,6 +76,8 @@ class CodeEditorEditText @JvmOverloads constructor(
     private var errorLineNumber: Int? = null
 
     var onFontSizeChanged: ((Float) -> Unit)? = null
+    var onGutterWidthChanged: ((Int) -> Unit)? = null
+    var onContentStartChanged: ((Int) -> Unit)? = null
 
     init {
         updateLineNumberPaint()
@@ -101,12 +107,42 @@ class CodeEditorEditText @JvmOverloads constructor(
         invalidate()
     }
 
+    fun applyTheme(
+        textColor: Int,
+        hintColor: Int,
+        gutterColor: Int,
+        gutterDividerColor: Int,
+        lineNumberColor: Int,
+        activeLineNumberColor: Int,
+        errorLineNumberColor: Int,
+        errorLineColor: Int,
+        searchMatchColor: Int,
+        activeSearchMatchColor: Int
+    ) {
+        setTextColor(textColor)
+        setHintTextColor(hintColor)
+        this.gutterColor = gutterColor
+        this.gutterDividerColor = gutterDividerColor
+        this.lineNumberColor = lineNumberColor
+        this.activeLineNumberColor = activeLineNumberColor
+        this.errorLineNumberColor = errorLineNumberColor
+        this.errorLineColor = errorLineColor
+        this.searchMatchColor = searchMatchColor
+        this.activeSearchMatchColor = activeSearchMatchColor
+        gutterPaint.color = gutterColor
+        gutterDividerPaint.color = gutterDividerColor
+        errorLinePaint.color = errorLineColor
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
         drawErrorLine(canvas)
         drawGutterBackground(canvas)
 
         val saveCount = canvas.save()
-        canvas.clipRect(scrollX + gutterWidthPx, scrollY, scrollX + width, scrollY + height)
+        val clipLeft = scrollX + contentClipStartPx()
+        val clipRight = scrollX + max(contentClipStartPx() + 1, width - contentClipEndPx())
+        canvas.clipRect(clipLeft, scrollY, clipRight, scrollY + height)
         super.onDraw(canvas)
         canvas.restoreToCount(saveCount)
 
@@ -191,28 +227,12 @@ class CodeEditorEditText @JvmOverloads constructor(
 
             val lineIndex = (lineNumber - 1).coerceIn(0, currentLayout.lineCount - 1)
             val lineStart = currentLayout.getLineStart(lineIndex)
-            val visibleHeight = height - totalPaddingTop - totalPaddingBottom
-            val targetScrollY = (currentLayout.getLineTop(lineIndex) - visibleHeight / 3).coerceAtLeast(0)
-            requestFocus()
-            setSelection(lineStart)
-            scrollTo(scrollX, targetScrollY)
+            revealOffsetRange(lineStart, lineStart, anchorOffset = lineStart)
         }
     }
 
     fun revealRange(start: Int, endExclusive: Int) {
-        val editable = text ?: return
-        val safeStart = start.coerceIn(0, editable.length)
-        val safeEnd = endExclusive.coerceIn(safeStart, editable.length)
-
-        post {
-            val currentLayout = layout ?: return@post
-            val lineIndex = currentLayout.getLineForOffset(safeStart)
-            val visibleHeight = height - totalPaddingTop - totalPaddingBottom
-            val targetScrollY = (currentLayout.getLineTop(lineIndex) - visibleHeight / 3).coerceAtLeast(0)
-            requestFocus()
-            setSelection(safeStart, safeEnd)
-            scrollTo(scrollX, targetScrollY)
-        }
+        revealOffsetRange(start, endExclusive, anchorOffset = start)
     }
 
     fun showSearchMatches(matches: List<EditorSearchMatch>, activeMatchIndex: Int) {
@@ -250,9 +270,45 @@ class CodeEditorEditText @JvmOverloads constructor(
 
     fun currentFontSizeSp(): Float = textSize / scaledDensity
 
+    fun currentGutterWidthPx(): Int = gutterWidthPx
+
+    fun currentContentStartPx(): Int = gutterWidthPx + basePaddingLeftPx
+
     private fun clearSearchHighlights(editable: Editable) {
         editable.getSpans(0, editable.length, BackgroundColorSpan::class.java).forEach { span ->
             editable.removeSpan(span)
+        }
+    }
+
+    private fun revealOffsetRange(
+        selectionStart: Int,
+        selectionEndExclusive: Int,
+        anchorOffset: Int
+    ) {
+        val editable = text ?: return
+        val safeStart = selectionStart.coerceIn(0, editable.length)
+        val safeEnd = selectionEndExclusive.coerceIn(safeStart, editable.length)
+        val safeAnchor = anchorOffset.coerceIn(safeStart, safeEnd)
+
+        post {
+            val currentLayout = layout ?: return@post
+            if (currentLayout.lineCount <= 0) {
+                return@post
+            }
+
+            val anchorLine = currentLayout.getLineForOffset(safeAnchor)
+            val visibleHeight = height - totalPaddingTop - totalPaddingBottom
+            val targetScrollY = (currentLayout.getLineTop(anchorLine) - visibleHeight / 3).coerceAtLeast(0)
+            val targetScrollX = calculateHorizontalRevealScroll(
+                currentLayout = currentLayout,
+                selectionStart = safeStart,
+                selectionEndExclusive = safeEnd,
+                anchorOffset = safeAnchor
+            )
+
+            requestFocus()
+            setSelection(safeStart, safeEnd)
+            scrollTo(targetScrollX, targetScrollY)
         }
     }
 
@@ -271,7 +327,7 @@ class CodeEditorEditText @JvmOverloads constructor(
         }
 
         val fixedLeft = scrollX.toFloat()
-        canvas.drawRect(fixedLeft, top.toFloat(), fixedLeft + width, bottom.toFloat(), errorLinePaint)
+        canvas.drawRect(fixedLeft + gutterWidthPx, top.toFloat(), fixedLeft + width, bottom.toFloat(), errorLinePaint)
     }
 
     private fun drawGutterBackground(canvas: Canvas) {
@@ -305,7 +361,7 @@ class CodeEditorEditText @JvmOverloads constructor(
             }
 
             val label = (lineIndex + 1).toString()
-            val baseline = (totalPaddingTop + currentLayout.getLineBaseline(lineIndex) - scrollY).toFloat()
+            val baseline = centeredLineNumberBaseline(currentLayout, lineIndex)
             val x = fixedLeft + gutterWidthPx - gutterHorizontalPaddingPx - lineNumberPaint.measureText(label)
             canvas.drawText(label, x, baseline, lineNumberPaint)
         }
@@ -313,6 +369,8 @@ class CodeEditorEditText @JvmOverloads constructor(
 
     private fun updateLineNumberPaint() {
         lineNumberPaint.textSize = textSize * 0.78f
+        lineNumberPaint.typeface = typeface ?: Typeface.MONOSPACE
+        lineNumberPaint.isSubpixelText = true
     }
 
     private fun updateGutterPadding() {
@@ -334,6 +392,57 @@ class CodeEditorEditText @JvmOverloads constructor(
             basePaddingRightPx,
             basePaddingBottomPx
         )
+        onGutterWidthChanged?.invoke(gutterWidthPx)
+        onContentStartChanged?.invoke(currentContentStartPx())
+    }
+
+    private fun contentClipStartPx(): Int = gutterWidthPx + max(basePaddingLeftPx, minimumContentClearancePx)
+
+    private fun contentClipEndPx(): Int = max(basePaddingRightPx, minimumContentClearancePx)
+
+    private fun calculateHorizontalRevealScroll(
+        currentLayout: Layout,
+        selectionStart: Int,
+        selectionEndExclusive: Int,
+        anchorOffset: Int
+    ): Int {
+        val viewportLeft = scrollX + contentClipStartPx()
+        val viewportRight = scrollX + width - contentClipEndPx()
+        val anchorLine = currentLayout.getLineForOffset(anchorOffset)
+        val selectionEndOnAnchorLine = selectionEndExclusive > selectionStart &&
+            currentLayout.getLineForOffset((selectionEndExclusive - 1).coerceAtLeast(selectionStart)) == anchorLine
+
+        val anchorLeft = horizontalPositionForOffset(currentLayout, anchorOffset)
+        val selectionRight = if (selectionEndOnAnchorLine) {
+            horizontalPositionForOffset(currentLayout, selectionEndExclusive)
+        } else {
+            anchorLeft + revealCursorWidthPx
+        }
+        val safeRight = max(anchorLeft + revealCursorWidthPx, selectionRight)
+        val viewportWidth = max(1, viewportRight - viewportLeft)
+
+        val targetScrollX = when {
+            safeRight - anchorLeft >= viewportWidth -> anchorLeft - contentClipStartPx()
+            anchorLeft < viewportLeft -> anchorLeft - contentClipStartPx()
+            safeRight > viewportRight -> safeRight - (width - contentClipEndPx())
+            else -> scrollX.toFloat()
+        }
+
+        return targetScrollX.roundToInt().coerceAtLeast(0)
+    }
+
+    private fun horizontalPositionForOffset(currentLayout: Layout, offset: Int): Float {
+        val safeOffset = offset.coerceIn(0, text?.length ?: 0)
+        return compoundPaddingLeft + currentLayout.getPrimaryHorizontal(safeOffset)
+    }
+
+    private fun centeredLineNumberBaseline(currentLayout: Layout, lineIndex: Int): Float {
+        val lineTop = totalPaddingTop + currentLayout.getLineTop(lineIndex) - scrollY
+        val lineBottom = totalPaddingTop + currentLayout.getLineBottom(lineIndex) - scrollY
+        val lineHeight = (lineBottom - lineTop).toFloat()
+        val fontMetrics = lineNumberPaint.fontMetrics
+        val textHeight = fontMetrics.descent - fontMetrics.ascent
+        return lineTop + (lineHeight - textHeight) / 2f - fontMetrics.ascent
     }
 
     private fun currentSnapshot(): EditorSnapshot {

@@ -26,11 +26,11 @@ public class JavaSyntaxHighlighter {
     private static final Pattern ANNOTATION_PATTERN = Pattern.compile("@[A-Za-z_][A-Za-z0-9_]*");
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final int keywordColor;
-    private final int stringColor;
-    private final int commentColor;
-    private final int annotationColor;
-    private final int numberColor;
+    private int keywordColor;
+    private int stringColor;
+    private int commentColor;
+    private int annotationColor;
+    private int numberColor;
 
     private Runnable pendingHighlight;
     private boolean isApplying;
@@ -41,6 +41,20 @@ public class JavaSyntaxHighlighter {
         commentColor = ContextCompat.getColor(context, R.color.syntax_comment);
         annotationColor = ContextCompat.getColor(context, R.color.syntax_annotation);
         numberColor = ContextCompat.getColor(context, R.color.syntax_number);
+    }
+
+    public void updateColors(
+            int keywordColor,
+            int stringColor,
+            int commentColor,
+            int annotationColor,
+            int numberColor
+    ) {
+        this.keywordColor = keywordColor;
+        this.stringColor = stringColor;
+        this.commentColor = commentColor;
+        this.annotationColor = annotationColor;
+        this.numberColor = numberColor;
     }
 
     public void schedule(EditText editText) {

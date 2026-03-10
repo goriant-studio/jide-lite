@@ -547,6 +547,7 @@ public class FileStorageHelper {
 
         saveFile("pom.xml", buildSamplePom());
         saveFile(MAVEN_SOURCE_ROOT + "/demo/Main.java", buildSampleMain());
+        saveFile(MAVEN_SOURCE_ROOT + "/demo/Person.java", buildSamplePerson());
     }
 
     private String buildSamplePom() {
@@ -573,18 +574,52 @@ public class FileStorageHelper {
     }
 
     private String buildSampleMain() {
-        return "package demo;\n"
-                + "\n"
-                + "import org.apache.commons.lang3.StringUtils;\n"
-                + "\n"
-                + "public class Main {\n"
-                + "    public static void main(String[] args) {\n"
-                + "        String title = StringUtils.capitalize(\"j-ide lite maven sample\");\n"
-                + "        String libraryName = StringUtils.join(new String[] {\"Apache\", \"Commons\", \"Lang\"}, ' ');\n"
-                + "\n"
-                + "        System.out.println(title);\n"
-                + "        System.out.println(\"Loaded: \" + libraryName);\n"
-                + "    }\n"
-                + "}\n";
+        return """
+                package demo;
+                
+                import org.apache.commons.lang3.StringUtils;
+                
+                public class Main {
+                    public static void main(String[] args) {
+                        String title = StringUtils.capitalize("j-ide lite maven sample");
+                        String libraryName = StringUtils.join(new String[] {"Apache", "Commons", "Lang"}, ' ');
+                
+                        System.out.println(title);
+                        System.out.println("Loaded: " + libraryName);
+                        Person p = new Person("Lucas", 28);
+                        System.out.println(p.name());
+                        System.out.println(p.age());
+                        System.out.println(p);
+                    }
+                }
+                """;
+    }
+
+    private String buildSamplePerson() {
+        return """
+                package demo;
+                
+                public class Person {
+                    private String name;
+                    private int age;
+                
+                    public Person(String name, int age){
+                        this.name = name;
+                        this.age = age;
+                    }
+                
+                    public String name(){
+                        return this.name;
+                    }
+                
+                    public int age(){
+                        return this.age;
+                    }
+                
+                    public String toString(){
+                        return "Name: " + this.name + " - Age: " + this.age;
+                    }
+                }
+                """;
     }
 }

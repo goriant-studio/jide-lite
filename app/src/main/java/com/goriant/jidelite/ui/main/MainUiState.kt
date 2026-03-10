@@ -1,5 +1,6 @@
 package com.goriant.jidelite.ui.main
 
+import com.goriant.jidelite.ui.theme.ThemeMode
 import java.io.File
 
 data class MainUiState(
@@ -14,7 +15,9 @@ data class MainUiState(
     val isDirty: Boolean = false,
     val isRunning: Boolean = false,
     val isResolvingDependencies: Boolean = false,
-    val isMavenProject: Boolean = false
+    val isMavenProject: Boolean = false,
+    val themeMode: ThemeMode = ThemeMode.DARK,
+    val isOnboardingVisible: Boolean = false
 ) {
     val selectedFileName: String?
         get() = selectedFilePath?.let { File(it).name }

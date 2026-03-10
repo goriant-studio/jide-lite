@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
         val viewModelFactory = AndroidViewModelFactory.getInstance(application)
         val viewModel = ViewModelProvider(this, viewModelFactory)[MainViewModel::class.java]
         setContent {
-            JIdeLiteTheme {
+            JIdeLiteTheme(darkTheme = viewModel.uiState.themeMode.isDarkTheme) {
                 MainRoute(viewModel = viewModel)
             }
         }

@@ -2,6 +2,7 @@ package com.goriant.jidelite
 
 import android.widget.EditText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.ViewModelProvider
@@ -40,6 +41,7 @@ class MainActivityIntegrationTest {
     @Before
     fun setUp() {
         clearWorkspace()
+        clearStateDatabase()
     }
 
     @After
@@ -103,7 +105,19 @@ class MainActivityIntegrationTest {
         )
     }
 
-    private fun launchActivity() {
+    @Test
+    fun themeToggleUpdatesUiState() {
+        launchActivity()
+        val initialMode = currentUiState().themeMode
+
+        composeRule.onNodeWithTag("topbar-theme").performClick()
+
+        composeRule.waitUntil(10_000) {
+            currentUiState().themeMode != initialMode
+        }
+    }
+
+    private fun launchActivity(dismissOnboarding: Boolean = true) {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         composeRule.waitUntil(10_000) {
             val uiState = currentUiState()
@@ -112,6 +126,9 @@ class MainActivityIntegrationTest {
                     uiState.files.any { it.name == "Main.java" } &&
                     uiState.selectedFileName == "pom.xml" &&
                     uiState.editorText.contains("<project")
+        }
+        if (dismissOnboarding) {
+            dismissOnboardingIfVisible()
         }
     }
 
@@ -134,6 +151,11 @@ class MainActivityIntegrationTest {
         deleteRecursively(context.filesDir.resolve("workspace"))
     }
 
+    private fun clearStateDatabase() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.deleteDatabase("jide-state.db")
+    }
+
     private fun deleteRecursively(file: File) {
         if (!file.exists()) {
             return
@@ -154,5 +176,17 @@ class MainActivityIntegrationTest {
             uiState = ViewModelProvider(activity)[MainViewModel::class.java].uiState
         }
         return checkNotNull(uiState)
+    }
+
+    private fun dismissOnboardingIfVisible() {
+        if (composeRule.onAllNodesWithTag("onboarding-dialog").fetchSemanticsNodes().isEmpty()) {
+            return
+        }
+
+        composeRule.onNodeWithTag("onboarding-dismiss").performClick()
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithTag("onboarding-dialog").fetchSemanticsNodes().isEmpty() &&
+                    !currentUiState().isOnboardingVisible
+        }
     }
 }

@@ -1,29 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">J-IDE Lite</string>
-    <string name="app_version">v1.3</string>
+    <string name="app_version">v2.1.0</string>
     <string name="app_name_short">J-IDE</string>
+
     <string name="action_resolve_short">Build</string>
     <string name="action_save">Save</string>
-    <string name="action_format_short">Beautify</string>
+    <string name="action_format_short">Format</string>
     <string name="action_run">Run</string>
     <string name="action_clear">Clear</string>
+    <string name="action_share">Share</string>
+    <string name="action_shortcuts">Keys</string>
+    <string name="action_theme_dark">Dark</string>
+    <string name="action_theme_light">Light</string>
+
     <string name="explorer_header">EXPLORER</string>
     <string name="workspace_label">WORKSPACE</string>
     <string name="explorer_empty">No Java files yet</string>
+
     <string name="editor_empty_title">No file selected</string>
     <string name="editor_hint">Start writing Java&#8230;</string>
-    <string name="terminal_title">Terminal</string>
+
+    <string name="terminal_title">Output</string>
     <string name="terminal_ready">Ready.</string>
-    <string name="terminal_intro">J-IDE Lite v1.3 - Local Java runner</string>
+    <string name="terminal_intro">J-IDE Lite v2.1.0 • Local Java runner</string>
     <string name="terminal_workspace_prefix">Workspace:</string>
-    <string name="status_ready">Offline Java workspace - local runner</string>
+
+    <string name="status_ready">Offline Java workspace • Local runner ready</string>
     <string name="status_formatted">Formatted %1$s</string>
     <string name="status_already_formatted">Already formatted</string>
+
     <string name="toast_formatted">Formatted</string>
     <string name="toast_format_no_changes">No format changes</string>
     <string name="toast_no_maven_project">No pom.xml found</string>
     <string name="toast_no_file_selected">No file selected</string>
+    <string name="toast_share_java_only">Open a Java file to share</string>
+    <string name="toast_share_failed">Could not open share sheet</string>
+    <string name="toast_share_opened">Share sheet opened</string>
+    <string name="toast_theme_dark">Dark theme enabled</string>
+    <string name="toast_theme_light">Light theme enabled</string>
+
     <string name="find_label">Find</string>
     <string name="replace_label">Replace</string>
     <string name="find_prev">Prev</string>
@@ -31,4 +47,24 @@
     <string name="find_close">Close</string>
     <string name="replace_action">Replace</string>
     <string name="replace_all_action">All</string>
+
+    <string name="share_chooser_title">Share Java file</string>
+
+    <string name="shortcuts_title">Keyboard Shortcuts</string>
+    <string name="shortcuts_subtitle">Hardware keyboard shortcuts available inside the editor.</string>
+    <string name="shortcuts_close">Close</string>
+
+    <string name="onboarding_title">Welcome to J-IDE Lite ☕️</string>
+    <string name="onboarding_subtitle">A quick tour of local Java running on your tablet</string>
+
+    <string name="onboarding_runner_title">Run Java locally</string>
+    <string name="onboarding_runner_body">Open a Java file with a main method, then press RUN. J-IDE Lite uses an embedded local runner, so you do not need Termux or any remote service.</string>
+
+    <string name="onboarding_maven_title">Use BUILD for Maven</string>
+    <string name="onboarding_maven_body">If your workspace contains pom.xml, press BUILD first to resolve Maven dependencies. Dependencies are cached locally, and RUN will compile with them automatically.</string>
+
+    <string name="onboarding_share_title">Share code and learn shortcuts</string>
+    <string name="onboarding_share_body">Use SHARE to send the current .java file through the Android share sheet. Tap KEYS or press Ctrl+/ to reopen keyboard shortcuts. Press Ctrl+? anytime to reopen this onboarding guide.</string>
+
+    <string name="onboarding_cta">Start Editing</string>
 </resources>
