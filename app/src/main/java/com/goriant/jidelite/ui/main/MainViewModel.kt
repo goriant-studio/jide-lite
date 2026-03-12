@@ -17,7 +17,9 @@ import com.goriant.jidelite.data.entity.WorkspaceEntity
 import com.goriant.jidelite.data.enums.BuildStatus
 import com.goriant.jidelite.data.enums.ProjectType
 import com.goriant.jidelite.editor.JavaCodeFormatter
+import com.goriant.jidelite.editor.ImportSuggester
 import com.goriant.jidelite.runner.CodeRunner
+import com.goriant.jidelite.runner.LocalJavaRunner
 import com.goriant.jidelite.storage.FileStorageHelper
 import com.goriant.jidelite.ui.theme.ThemeMode
 import java.io.File
@@ -39,6 +41,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val HISTORY_ENTRIES_KEY = "history.entries"
         private const val THEME_MODE_KEY = "ux.theme.mode"
         private const val ONBOARDING_SEEN_KEY = "ux.onboarding.seen"
+        private const val WORD_WRAP_KEY = "ux.editor.wordWrap"
         private const val MAX_HISTORY_ENTRIES = 200
     }
 
@@ -46,6 +49,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val fileStorageHelper = FileStorageHelper(app)
     private val stateRepository = IdeStateRepository(app)
     private val javaCodeFormatter = JavaCodeFormatter()
+    private val importSuggester = ImportSuggester()
     private val runExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var workspaceEntity: WorkspaceEntity? = null
@@ -308,9 +312,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         uiState = uiState.copy(
             isRunning = true,
             isResolvingDependencies = false,
-            statusText = "Running $fileName",
+            statusText = "Auto-saved — Running $fileName",
             terminalText = "Running $fileName...",
-            editorDiagnostic = null
+            editorDiagnostic = null,
+            pendingImportSuggestion = null
         )
         persistBuildState(
             status = BuildStatus.RUNNING,
@@ -354,7 +359,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         uiState = uiState.copy(
             isRunning = false,
             isResolvingDependencies = true,
-            statusText = "Resolving Maven dependencies",
+            statusText = "Auto-saved — Resolving dependencies",
             terminalText = "Resolving Maven dependencies...",
             editorDiagnostic = null
         )
@@ -462,6 +467,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         uiState = uiState.copy(isOnboardingVisible = true)
     }
 
+    fun onToggleWordWrap() {
+        val nextEnabled = !uiState.isWordWrapEnabled
+        uiState = uiState.copy(
+            isWordWrapEnabled = nextEnabled,
+            statusText = if (nextEnabled) "Word wrap on" else "Word wrap off"
+        )
+        emitToast(if (nextEnabled) "Word wrap enabled" else "Word wrap disabled")
+        try {
+            stateRepository.putState(APPLICATION_SCOPE, WORD_WRAP_KEY, if (nextEnabled) "true" else "false")
+        } catch (_: Throwable) {
+            // Ignore persistence issues.
+        }
+    }
+
+    fun onAcceptImportSuggestion() {
+        val suggestion = uiState.pendingImportSuggestion ?: return
+        val currentText = uiState.editorText
+        val updatedText = importSuggester.insertImport(currentText, suggestion.importStatement)
+        if (updatedText == currentText) {
+            emitToast("Import already present")
+            uiState = uiState.copy(pendingImportSuggestion = null)
+            return
+        }
+        uiState = uiState.copy(
+            editorText = updatedText,
+            isDirty = true,
+            pendingImportSuggestion = null,
+            statusText = "Added import ${suggestion.simpleName}"
+        )
+        emitToast("Added import ${suggestion.qualifiedName}")
+    }
+
+    fun onSubmitStdin(input: String) {
+        codeRunner?.submitStdin(input + "\n")
+    }
+
     fun prepareSelectedJavaFileForShare(): File? {
         val selectedPath = uiState.selectedFilePath
         val fileName = uiState.selectedFileName
@@ -487,6 +528,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         uiState = uiState.copy(statusText = "Sharing $fileName")
         return file
+    }
+
+    fun onExportProjectRequested(): File? {
+        saveCurrentFile(showToast = false)
+        return try {
+            val exportDir = File(app.cacheDir, "exports")
+            fileStorageHelper.exportWorkspaceAsZip(exportDir)
+        } catch (e: Exception) {
+            emitToast("Failed to export project: ${e.message}")
+            null
+        }
+    }
+
+    fun onImportProjectRequested(inputStream: java.io.InputStream) {
+        try {
+            fileStorageHelper.importWorkspaceFromZip(inputStream)
+            val refreshedFiles = refreshFiles()
+            initializeDatabaseState(refreshedFiles)
+            uiState = uiState.copy(
+                files = refreshedFiles,
+                statusText = "Project imported successfully"
+            )
+            val firstFileToOpen = refreshedFiles.firstOrNull { it.isFile && it.name.endsWith(".java") }
+            if (firstFileToOpen != null) {
+                openFile(firstFileToOpen)
+            } else {
+                uiState = uiState.copy(
+                    selectedFilePath = null,
+                    editorText = ""
+                )
+            }
+            emitToast("Project imported successfully")
+        } catch (e: Exception) {
+            uiState = uiState.copy(statusText = "Import failed")
+            emitToast("Failed to import project: ${e.message}")
+        }
     }
 
     fun updateStatus(statusText: String, toastMessage: String? = null) {
@@ -533,9 +610,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val storedThemeMode = ThemeMode.fromStorage(stateRepository.getState(APPLICATION_SCOPE, THEME_MODE_KEY))
             val hasSeenOnboarding = stateRepository.getState(APPLICATION_SCOPE, ONBOARDING_SEEN_KEY)
                 ?.equals("true", ignoreCase = true) == true
+            val wordWrapEnabled = stateRepository.getState(APPLICATION_SCOPE, WORD_WRAP_KEY)
+                ?.equals("true", ignoreCase = true) == true
             uiState = uiState.copy(
                 themeMode = storedThemeMode ?: resolveDefaultThemeMode(),
-                isOnboardingVisible = !hasSeenOnboarding
+                isOnboardingVisible = !hasSeenOnboarding,
+                isWordWrapEnabled = wordWrapEnabled
             )
         } catch (_: Throwable) {
             uiState = uiState.copy(
@@ -607,12 +687,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun applyBackgroundPresentation(presentation: RunPresentation) {
         val diagnostic = resolveEditorDiagnostic(presentation.editorDiagnostic)
+        val importSuggestion = resolveImportSuggestion(presentation)
         var nextState = uiState.copy(
             isRunning = false,
             isResolvingDependencies = false,
             statusText = presentation.statusText,
             terminalText = presentation.terminalText,
-            editorDiagnostic = diagnostic
+            editorDiagnostic = diagnostic,
+            pendingImportSuggestion = importSuggestion
         )
         val diagnosticFilePath = diagnostic?.filePath
 
@@ -640,6 +722,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             status = inferBuildStatus(presentation),
             output = presentation.terminalText,
             artifactPath = null
+        )
+    }
+
+    private fun resolveImportSuggestion(presentation: RunPresentation): ImportSuggestion? {
+        val terminalText = presentation.terminalText
+        if (terminalText.isBlank()) return null
+        val result = importSuggester.suggestImport(terminalText) ?: return null
+        return ImportSuggestion(
+            qualifiedName = result.qualifiedName,
+            importStatement = result.importStatement,
+            simpleName = result.simpleName
         )
     }
 
@@ -736,21 +829,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun createCodeRunner(): CodeRunner? {
         return try {
-            val runnerClass = Class.forName("com.goriant.jidelite.runner.LocalJavaRunner")
-            val constructor = runnerClass.getDeclaredConstructor(Context::class.java, File::class.java)
-            val instance = constructor.newInstance(app, fileStorageHelper.workspaceDirectory)
-            instance as CodeRunner
+            LocalJavaRunner(app, fileStorageHelper.workspaceDirectory)
         } catch (throwable: Throwable) {
-            runnerInitializationError = unwrapReflectionFailure(throwable)
+            runnerInitializationError = throwable
             null
-        }
-    }
-
-    private fun unwrapReflectionFailure(throwable: Throwable): Throwable {
-        var current = throwable
-        while (true) {
-            val next = current.cause ?: return current
-            current = next
         }
     }
 
@@ -975,7 +1057,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun determineProjectType(files: List<File>): ProjectType {
         return when {
             files.any { it.isFile && it.name == "pom.xml" } -> ProjectType.MAVEN
-            files.any { it.isFile && it.name == "build.gradle" } -> ProjectType.GRADLE
             else -> ProjectType.PLAIN_JAVA
         }
     }

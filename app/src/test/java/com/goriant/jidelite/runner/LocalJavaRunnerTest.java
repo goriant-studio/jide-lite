@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 @ExtendWith(MockitoExtension.class)
@@ -327,6 +328,123 @@ public class LocalJavaRunnerTest {
         assertThat(new File(classesDir, "demo/Person.class")).exists();
     }
 
+    @Test
+    void buildCompilationPlanUsesCacheHitWhenSourcesAreUnchanged() throws Exception {
+        File mainFile = writeSource(
+                "src/main/java/demo/Main.java",
+                "package demo;\n"
+                        + "public class Main {\n"
+                        + "  public static void main(String[] args) {\n"
+                        + "    System.out.println(new Person().name());\n"
+                        + "  }\n"
+                        + "}\n"
+        );
+        File personFile = writeSource(
+                "src/main/java/demo/Person.java",
+                "package demo;\n"
+                        + "public class Person {\n"
+                        + "  String name() { return \"Ava\"; }\n"
+                        + "}\n"
+        );
+        File classesDir = new File(rootDirectory, "incremental-classes");
+        assertThat(classesDir.mkdirs()).isTrue();
+
+        Object emptyCache = loadBuildCache(new File(rootDirectory, "missing-cache.bin"));
+        Object initialPlan = buildCompilationPlan(
+                Arrays.asList(mainFile, personFile),
+                emptyCache,
+                classesDir,
+                "deps-v1"
+        );
+        Object cachedBuild = readField(initialPlan, "nextCache");
+        materializeCompiledOutputs(cachedBuild, classesDir);
+
+        Object cachedPlan = buildCompilationPlan(
+                Arrays.asList(mainFile, personFile),
+                cachedBuild,
+                classesDir,
+                "deps-v1"
+        );
+
+        assertThat(readField(cachedPlan, "fullRebuild")).isEqualTo(false);
+        assertThat(compilationTargetNames(cachedPlan)).isEmpty();
+    }
+
+    @Test
+    void buildCompilationPlanRecompilesChangedSourceAndDependentsOnly() throws Exception {
+        File mainFile = writeSource(
+                "src/main/java/demo/Main.java",
+                "package demo;\n"
+                        + "public class Main {\n"
+                        + "  public static void main(String[] args) {\n"
+                        + "    System.out.println(new Person().name());\n"
+                        + "  }\n"
+                        + "}\n"
+        );
+        File personFile = writeSource(
+                "src/main/java/demo/Person.java",
+                "package demo;\n"
+                        + "public class Person {\n"
+                        + "  String name() { return \"Ava\"; }\n"
+                        + "}\n"
+        );
+        File utilFile = writeSource(
+                "src/main/java/demo/Util.java",
+                "package demo;\n"
+                        + "public class Util {\n"
+                        + "  static int value() { return 1; }\n"
+                        + "}\n"
+        );
+        File classesDir = new File(rootDirectory, "incremental-classes");
+        assertThat(classesDir.mkdirs()).isTrue();
+
+        Object emptyCache = loadBuildCache(new File(rootDirectory, "missing-cache.bin"));
+        Object initialPlan = buildCompilationPlan(
+                Arrays.asList(mainFile, personFile, utilFile),
+                emptyCache,
+                classesDir,
+                "deps-v1"
+        );
+        Object cachedBuild = readField(initialPlan, "nextCache");
+        materializeCompiledOutputs(cachedBuild, classesDir);
+
+        Files.write(
+                personFile.toPath(),
+                ("package demo;\n"
+                        + "public class Person {\n"
+                        + "  String name() { return \"Nova\"; }\n"
+                        + "}\n").getBytes(StandardCharsets.UTF_8)
+        );
+        assertThat(personFile.setLastModified(personFile.lastModified() + 2_000L)).isTrue();
+
+        Object incrementalPlan = buildCompilationPlan(
+                Arrays.asList(mainFile, personFile, utilFile),
+                cachedBuild,
+                classesDir,
+                "deps-v1"
+        );
+
+        assertThat(readField(incrementalPlan, "fullRebuild")).isEqualTo(false);
+        assertThat(compilationTargetNames(incrementalPlan))
+                .containsExactlyInAnyOrder("Main.java", "Person.java");
+    }
+
+    @Test
+    void invokeMainMethodWithTimeoutStopsLongRunningProgram() throws Exception {
+        LocalJavaRunner runner = new LocalJavaRunner(context, workspaceDirectory, new EmptyDependencyResolver(), 50L);
+
+        Object outcome = invokePrivateOn(
+                runner,
+                "invokeMainMethodWithTimeout",
+                new Class<?>[]{Method.class},
+                LongSleepingProgram.class.getDeclaredMethod("main", String[].class)
+        );
+
+        assertThat(readField(outcome, "timedOut")).isEqualTo(true);
+        assertThat((String) readField(outcome, "stderr"))
+                .contains("Runtime timed out after 50ms and was terminated.");
+    }
+
     private File writeSource(String relativePath, String content) throws Exception {
         File file = new File(workspaceDirectory, relativePath);
         File parent = file.getParentFile();
@@ -355,15 +473,70 @@ public class LocalJavaRunnerTest {
     }
 
     private Object invokePrivate(String methodName, Class<?>[] parameterTypes, Object... arguments) throws Exception {
+        return invokePrivateOn(localJavaRunner, methodName, parameterTypes, arguments);
+    }
+
+    private Object invokePrivateOn(Object target, String methodName, Class<?>[] parameterTypes, Object... arguments) throws Exception {
         Method method = LocalJavaRunner.class.getDeclaredMethod(methodName, parameterTypes);
         method.setAccessible(true);
-        return method.invoke(localJavaRunner, arguments);
+        return method.invoke(target, arguments);
     }
 
     private Object readField(Object target, String fieldName) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return field.get(target);
+    }
+
+    private Object loadBuildCache(File metadataFile) throws Exception {
+        return invokePrivate("loadBuildCache", new Class<?>[]{File.class}, metadataFile);
+    }
+
+    private Object buildCompilationPlan(
+            List<File> sourceFiles,
+            Object buildCache,
+            File classesDir,
+            String dependencyFingerprint
+    ) throws Exception {
+        return invokePrivate(
+                "buildCompilationPlan",
+                new Class<?>[]{List.class, innerClass("BuildCache"), File.class, String.class},
+                sourceFiles,
+                buildCache,
+                classesDir,
+                dependencyFingerprint
+        );
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> compilationTargetNames(Object compilationPlan) throws Exception {
+        List<File> sourceFiles = (List<File>) readField(compilationPlan, "sourcesToCompile");
+        return sourceFiles.stream().map(File::getName).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void materializeCompiledOutputs(Object buildCache, File classesDir) throws Exception {
+        Map<String, Object> sourcesByPath = (Map<String, Object>) readField(buildCache, "sourcesByPath");
+        for (Object cachedSourceState : sourcesByPath.values()) {
+            String packageName = (String) readField(cachedSourceState, "packageName");
+            List<String> typeNames = (List<String>) readField(cachedSourceState, "typeNames");
+            File packageDirectory = packageName.isEmpty()
+                    ? classesDir
+                    : new File(classesDir, packageName.replace('.', File.separatorChar));
+            assertThat(packageDirectory.mkdirs() || packageDirectory.exists()).isTrue();
+            for (String typeName : typeNames) {
+                Files.write(new File(packageDirectory, typeName + ".class").toPath(), new byte[0]);
+            }
+        }
+    }
+
+    private Class<?> innerClass(String simpleName) {
+        for (Class<?> candidate : LocalJavaRunner.class.getDeclaredClasses()) {
+            if (candidate.getSimpleName().equals(simpleName)) {
+                return candidate;
+            }
+        }
+        throw new IllegalArgumentException("Missing inner class " + simpleName);
     }
 
     private File findCommonsLangJar() throws Exception {
@@ -399,6 +572,13 @@ public class LocalJavaRunnerTest {
         @Override
         public DependencyResolutionResult resolve(File workspaceDirectory) {
             return result;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private static final class LongSleepingProgram {
+        public static void main(String[] args) throws Exception {
+            Thread.sleep(Long.MAX_VALUE);
         }
     }
 }

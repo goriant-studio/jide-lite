@@ -13,6 +13,8 @@
     <string name="action_shortcuts">Keys</string>
     <string name="action_theme_dark">Dark</string>
     <string name="action_theme_light">Light</string>
+    <string name="action_export">Export</string>
+    <string name="action_import">Import</string>
 
     <string name="explorer_header">EXPLORER</string>
     <string name="workspace_label">WORKSPACE</string>
@@ -39,6 +41,9 @@
     <string name="toast_share_opened">Share sheet opened</string>
     <string name="toast_theme_dark">Dark theme enabled</string>
     <string name="toast_theme_light">Light theme enabled</string>
+    <string name="toast_export_opened">Exporting project</string>
+    <string name="toast_export_failed">Export failed</string>
+    <string name="toast_import_failed">Import failed</string>
 
     <string name="find_label">Find</string>
     <string name="replace_label">Replace</string>

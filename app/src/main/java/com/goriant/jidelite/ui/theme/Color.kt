@@ -35,6 +35,8 @@ internal val DarkSyntaxString = Color(0xFF98C379)
 internal val DarkSyntaxComment = Color(0xFF6B7285)
 internal val DarkSyntaxAnnotation = Color(0xFF7DCFFF)
 internal val DarkSyntaxNumber = Color(0xFFD19A66)
+internal val DarkFindWidgetBackground = Color(0xFF252526)
+internal val DarkFindWidgetBorder = Color(0xFF454545)
 
 internal val LightBackground = Color(0xFFF4F1EA)
 internal val LightTopBarSurface = Color(0xFFFBF8F2)
@@ -68,6 +70,8 @@ internal val LightSyntaxString = Color(0xFFA1703C)
 internal val LightSyntaxComment = Color(0xFF8A918A)
 internal val LightSyntaxAnnotation = Color(0xFF4E7F91)
 internal val LightSyntaxNumber = Color(0xFFB26F49)
+internal val LightFindWidgetBackground = Color(0xFFF3F3F3)
+internal val LightFindWidgetBorder = Color(0xFFCBCBCB)
 
 @Immutable
 data class JIdeLiteExtraColors(
@@ -97,7 +101,9 @@ data class JIdeLiteExtraColors(
     val syntaxString: Color,
     val syntaxComment: Color,
     val syntaxAnnotation: Color,
-    val syntaxNumber: Color
+    val syntaxNumber: Color,
+    val findWidgetBackground: Color,
+    val findWidgetBorder: Color
 )
 
 internal val DarkExtraColors = JIdeLiteExtraColors(
@@ -127,7 +133,9 @@ internal val DarkExtraColors = JIdeLiteExtraColors(
     syntaxString = DarkSyntaxString,
     syntaxComment = DarkSyntaxComment,
     syntaxAnnotation = DarkSyntaxAnnotation,
-    syntaxNumber = DarkSyntaxNumber
+    syntaxNumber = DarkSyntaxNumber,
+    findWidgetBackground = DarkFindWidgetBackground,
+    findWidgetBorder = DarkFindWidgetBorder
 )
 
 internal val LightExtraColors = JIdeLiteExtraColors(
@@ -157,5 +165,7 @@ internal val LightExtraColors = JIdeLiteExtraColors(
     syntaxString = LightSyntaxString,
     syntaxComment = LightSyntaxComment,
     syntaxAnnotation = LightSyntaxAnnotation,
-    syntaxNumber = LightSyntaxNumber
+    syntaxNumber = LightSyntaxNumber,
+    findWidgetBackground = LightFindWidgetBackground,
+    findWidgetBorder = LightFindWidgetBorder
 )

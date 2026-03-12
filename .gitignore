@@ -89,3 +89,9 @@ temp/
 coverage/
 .junit/
 .gradle
+
+# AI Agents & IDE tools
+.agent/
+.agents/
+.cursor/
+skills-lock.json

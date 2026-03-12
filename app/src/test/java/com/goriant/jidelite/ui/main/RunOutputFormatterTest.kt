@@ -54,4 +54,20 @@ class RunOutputFormatterTest {
         assertThat(presentation.editorDiagnostic?.fileReference).isEqualTo("src/main/java/demo/Main.java")
         assertThat(presentation.editorDiagnostic?.lineNumber).isEqualTo(9)
     }
+
+    @Test
+    fun formatUsesTimeoutLabelsWhenRunExceedsLimit() {
+        val presentation = RunOutputFormatter.format(
+            RunResult(
+                false,
+                "\$ javac incremental cache hit\nCompile success.\n\$ java demo.Main",
+                "Runtime timed out after 10s and was terminated.",
+                124
+            )
+        )
+
+        assertThat(presentation.statusText).isEqualTo("Run timed out")
+        assertThat(presentation.terminalText).contains("Run timed out")
+        assertThat(presentation.terminalText).contains("Exit code: 124")
+    }
 }

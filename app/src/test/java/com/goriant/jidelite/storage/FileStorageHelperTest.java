@@ -49,7 +49,7 @@ public class FileStorageHelperTest {
         List<File> workspaceFiles = fileStorageHelper.listWorkspaceFiles();
 
         assertThat(workspaceFiles).extracting(fileStorageHelper::toWorkspaceRelativePath)
-                .containsExactly("pom.xml", "src/main/java/demo/Main.java");
+                .containsExactly("pom.xml", "src/main/java/demo/Main.java", "src/main/java/demo/Person.java");
         assertThat(fileStorageHelper.readFile("pom.xml")).contains("<artifactId>commons-lang3</artifactId>");
         assertThat(fileStorageHelper.readFile("src/main/java/demo/Main.java"))
                 .contains("StringUtils.capitalize")
@@ -82,7 +82,7 @@ public class FileStorageHelperTest {
         fileStorageHelper.initializeWorkspace();
 
         assertThat(fileStorageHelper.listWorkspaceFiles()).extracting(fileStorageHelper::toWorkspaceRelativePath)
-                .containsExactly("pom.xml", "src/main/java/demo/Main.java");
+                .containsExactly("pom.xml", "src/main/java/demo/Main.java", "src/main/java/demo/Person.java");
     }
 
     @Test
@@ -105,7 +105,7 @@ public class FileStorageHelperTest {
         assertThat(secondFile.getName()).isEqualTo("Main2.java");
         assertThat(thirdFile.getName()).isEqualTo("Main3.java");
         assertThat(javaFiles).extracting(fileStorageHelper::toWorkspaceRelativePath)
-                .containsExactly("src/main/java/demo/Main.java", "src/main/java/Main2.java", "src/main/java/Main3.java");
+                .containsExactly("src/main/java/demo/Main.java", "src/main/java/demo/Person.java", "src/main/java/Main2.java", "src/main/java/Main3.java");
     }
 
     @Test

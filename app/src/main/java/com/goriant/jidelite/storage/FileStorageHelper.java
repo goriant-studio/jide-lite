@@ -353,6 +353,73 @@ public class FileStorageHelper {
         return destination;
     }
 
+    public File exportWorkspaceAsZip(File outputDirectory) throws IOException {
+        ensureWorkspaceDirectory();
+        ensureDirectory(outputDirectory);
+
+        File zipFile = new File(outputDirectory, "workspace_export_" + System.currentTimeMillis() + ".zip");
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(zipFile);
+             java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(fos)) {
+
+            List<File> files = listWorkspaceFiles();
+            for (File file : files) {
+                String relativePath = toWorkspaceRelativePath(file);
+                java.util.zip.ZipEntry zipEntry = new java.util.zip.ZipEntry(relativePath);
+                zos.putNextEntry(zipEntry);
+
+                try (FileInputStream fis = new FileInputStream(file)) {
+                    byte[] buffer = new byte[4096];
+                    int length;
+                    while ((length = fis.read(buffer)) >= 0) {
+                        zos.write(buffer, 0, length);
+                    }
+                }
+                zos.closeEntry();
+            }
+        }
+        return zipFile;
+    }
+
+    public void importWorkspaceFromZip(java.io.InputStream zipStream) throws IOException {
+        ensureWorkspaceDirectory();
+
+        // Clear existing workspace
+        File[] children = workspaceDirectory.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteRecursively(child);
+            }
+        }
+
+        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(zipStream)) {
+            java.util.zip.ZipEntry zipEntry = zis.getNextEntry();
+            String canonicalDestPath = workspaceDirectory.getCanonicalPath();
+
+            while (zipEntry != null) {
+                File newFile = new File(workspaceDirectory, zipEntry.getName());
+                // Zip Slip vulnerability prevention
+                String canonicalDestFile = newFile.getCanonicalPath();
+                if (!canonicalDestFile.startsWith(canonicalDestPath + File.separator)) {
+                    throw new IOException("Entry is outside of the target dir: " + zipEntry.getName());
+                }
+
+                if (zipEntry.isDirectory()) {
+                    ensureDirectory(newFile);
+                } else {
+                    ensureParentDirectory(newFile);
+                    try (java.io.FileOutputStream fos = new java.io.FileOutputStream(newFile)) {
+                        byte[] buffer = new byte[4096];
+                        int length;
+                        while ((length = zis.read(buffer)) >= 0) {
+                            fos.write(buffer, 0, length);
+                        }
+                    }
+                }
+                zipEntry = zis.getNextEntry();
+            }
+        }
+    }
+
     private void collectWorkspaceFiles(File directory, List<File> files) {
         File[] children = directory.listFiles();
         if (children == null) {

@@ -11,11 +11,16 @@ import android.text.TextWatcher
 import android.text.style.BackgroundColorSpan
 import android.util.AttributeSet
 import android.util.TypedValue
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import androidx.appcompat.widget.AppCompatEditText
 import androidx.core.content.ContextCompat
 import com.goriant.jidelite.R
+import com.goriant.jidelite.editor.BracketHelper
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -81,6 +86,87 @@ class CodeEditorEditText @JvmOverloads constructor(
     var onFontSizeChanged: ((Float) -> Unit)? = null
     var onGutterWidthChanged: ((Int) -> Unit)? = null
     var onContentStartChanged: ((Int) -> Unit)? = null
+    var onSoftEnterKey: (() -> Unit)? = null
+
+    fun setWordWrapEnabled(enabled: Boolean) {
+        setHorizontallyScrolling(!enabled)
+        invalidate()
+        requestLayout()
+    }
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        val base = super.onCreateInputConnection(outAttrs) ?: return null
+        return object : InputConnectionWrapper(base, true) {
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                if (text == "\n") {
+                    val callback = onSoftEnterKey
+                    if (callback != null) {
+                        callback()
+                        return true
+                    }
+                }
+                // Bracket auto-close
+                if (text != null && text.length == 1) {
+                    val typed = text[0]
+                    val editable = this@CodeEditorEditText.text
+                    val cursorPos = this@CodeEditorEditText.selectionStart
+                    if (editable != null && cursorPos >= 0) {
+                        val fullText = editable.toString()
+                        if (BracketHelper.shouldAutoClose(fullText, cursorPos, typed)) {
+                            val closer = BracketHelper.autoCloseChar(typed)
+                            val result = super.commitText(text.toString() + closer, newCursorPosition)
+                            // Position cursor between the pair
+                            val newPos = this@CodeEditorEditText.selectionStart
+                            if (newPos > 0) {
+                                this@CodeEditorEditText.setSelection(newPos - 1)
+                            }
+                            return result
+                        }
+                    }
+                }
+                return super.commitText(text, newCursorPosition)
+            }
+
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                // Smart backspace: delete matched pair when cursor is between them
+                if (beforeLength == 1 && afterLength == 0) {
+                    val editable = this@CodeEditorEditText.text
+                    val cursorPos = this@CodeEditorEditText.selectionStart
+                    if (editable != null && cursorPos > 0 && cursorPos < editable.length) {
+                        if (BracketHelper.isBetweenMatchedPair(editable.toString(), cursorPos)) {
+                            return super.deleteSurroundingText(1, 1)
+                        }
+                    }
+                }
+                return super.deleteSurroundingText(beforeLength, afterLength)
+            }
+
+            override fun sendKeyEvent(event: KeyEvent): Boolean {
+                if (event.action == KeyEvent.ACTION_DOWN &&
+                    (event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
+                ) {
+                    val callback = onSoftEnterKey
+                    if (callback != null) {
+                        callback()
+                        return true
+                    }
+                }
+                // Smart backspace via hardware key
+                if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DEL) {
+                    val editable = this@CodeEditorEditText.text
+                    val cursorPos = this@CodeEditorEditText.selectionStart
+                    val selEnd = this@CodeEditorEditText.selectionEnd
+                    if (editable != null && cursorPos == selEnd && cursorPos > 0 && cursorPos < editable.length) {
+                        if (BracketHelper.isBetweenMatchedPair(editable.toString(), cursorPos)) {
+                            editable.delete(cursorPos - 1, cursorPos + 1)
+                            return true
+                        }
+                    }
+                }
+                return super.sendKeyEvent(event)
+            }
+        }
+    }
 
     init {
         updateLineNumberPaint()

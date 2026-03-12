@@ -15,12 +15,19 @@ object RunOutputFormatter {
                 (runResult.stdout.contains("Execution mode: simulated", ignoreCase = true) ||
                         runResult.stdout.contains("[placeholder runner]", ignoreCase = true) ||
                         runResult.stderr.contains("placeholder", ignoreCase = true))
+        val isTimedOut = runResult.exitCode == 124 &&
+            runResult.stderr.contains("timed out", ignoreCase = true)
         val terminalBuilder = StringBuilder()
 
         val statusText = when {
             isSimulated -> {
                 terminalBuilder.append("Simulated run")
                 "Placeholder runner"
+            }
+
+            isTimedOut -> {
+                terminalBuilder.append("Run timed out")
+                "Run timed out"
             }
 
             runResult.isSuccess -> {
